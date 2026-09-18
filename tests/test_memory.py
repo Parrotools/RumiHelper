@@ -113,3 +113,35 @@ async def test_chat_includes_user_memory_in_system_messages(monkeypatch):
     assert "MEMORY_CONTEXT" in seen[0][0]["content"]
     assert sum(message["role"] == "system" for message in seen[0]) == 1
     assert seen[0][-1] == {"role": "user", "content": "你好"}
+
+
+@pytest.mark.asyncio
+async def test_group_memory_list_refuses_to_expose_private_memories(monkeypatch):
+    from rumi_helper.plugins import memory as memory_plugin
+
+    calls: list[tuple[str, int]] = []
+    sent: list[str] = []
+
+    class FakeMemory:
+        async def list_for_context(self, user_id: str, limit: int = 20):
+            calls.append((user_id, limit))
+            return [{"id": 1, "type": "fact", "content": "private secret"}]
+
+    class FakeGroupEvent:
+        def __init__(self):
+            self.user_id = "20000"
+
+    runtime = SimpleNamespace(memory=FakeMemory())
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(memory_plugin, "GroupMessageEvent", FakeGroupEvent)
+    monkeypatch.setattr(memory_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(memory_plugin, "send_local_reply", fake_send_local_reply)
+
+    await memory_plugin._handle_list(FakeGroupEvent())
+
+    assert calls == []
+    assert sent == ["为了隐私，长期记忆只能在私聊中查看。"]
+    assert "private secret" not in sent[0]

@@ -311,6 +311,38 @@ async def test_memory_save_is_confirmed_before_writing(db):
     assert runtime.memory.saved == [("user-1", "fact", "我喜欢研究 HPC")]
 
 
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_list_refuses_to_expose_private_memories_in_group(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"memory_list","arguments":{}}'),
+        FakeGitHub(),
+    )
+    calls: list[tuple[str, int]] = []
+
+    class CountingMemory(FakeMemory):
+        async def list_for_context(self, user_id: str, limit: int = 20) -> list[dict]:
+            calls.append((user_id, limit))
+            return [{"id": 1, "type": "fact", "content": "private secret"}]
+
+    runtime.memory = CountingMemory()
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="user-1", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="查看我的长期记忆",
+    )
+
+    assert result is not None and result.handled
+    assert result.message == "操作失败：为了隐私，长期记忆只能在私聊中查看"
+    assert calls == []
+    assert "private secret" not in result.message
+
+
 @pytest.mark.asyncio
 async def test_notification_and_reminder_use_confirmation_and_existing_settings(db):
     llm = FakeLLM('{"action":"notification_set","arguments":{"name":"reminder","enabled":true}}')

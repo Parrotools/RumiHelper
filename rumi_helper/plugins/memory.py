@@ -1,7 +1,7 @@
 """长期记忆命令：显式保存与查看，不自动保存全部聊天。"""
 
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import MessageEvent
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 from nonebot.rule import Rule
 
 from rumi_helper.plugins.chat_message_utils import (
@@ -73,6 +73,13 @@ async def _handle_remember(event: MessageEvent):
 @list_matcher.handle()
 async def _handle_list(event: MessageEvent):
     runtime = get_runtime()
+    if isinstance(event, GroupMessageEvent):
+        await send_local_reply(
+            list_matcher,
+            runtime,
+            "为了隐私，长期记忆只能在私聊中查看。",
+        )
+        return
     memories = await runtime.memory.list_for_context(str(event.user_id), limit=20)
     if not memories:
         await send_local_reply(list_matcher, runtime, "暂时没有长期记忆。")

@@ -91,7 +91,11 @@ async def memory_save(runtime: Any, user_id: str, arguments: dict[str, Any], ses
 
 
 async def memory_list(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del arguments, session_key
+    del arguments
+    if session_key.startswith("group:"):
+        from rumi_helper.services.memory import MemoryValidationError
+
+        raise MemoryValidationError("为了隐私，长期记忆只能在私聊中查看")
     memories = await runtime.memory.list_for_context(user_id, limit=20)
     if not memories:
         return "暂时没有长期记忆。"
