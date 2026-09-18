@@ -56,6 +56,7 @@ class SchedulerService:
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._started = False
         self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
+        self._shutdown_cancel_grace_seconds = min(1.0, self._shutdown_timeout_seconds)
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
@@ -148,7 +149,19 @@ class SchedulerService:
                 )
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
+                _cancelled, stubborn = await asyncio.wait(
+                    pending,
+                    timeout=self._shutdown_cancel_grace_seconds,
+                )
+                if stubborn:
+                    logger.error(
+                        "Scheduler 有 %s 个任务未响应取消，继续关闭；任务可能在进程退出前仍短暂运行",
+                        len(stubborn),
+                    )
+                    # A task can suppress CancelledError. Send one final cancel,
+                    # but never block shutdown indefinitely waiting for cooperation.
+                    for task in stubborn:
+                        task.cancel()
 
     async def create_reminder(
         self,

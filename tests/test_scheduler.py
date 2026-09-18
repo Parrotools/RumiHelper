@@ -337,6 +337,42 @@ async def test_stop_cancels_inflight_task_after_shutdown_timeout(db):
     assert not scheduler._active_runs
 
 
+async def test_stop_is_bounded_when_task_swallows_first_cancel(db):
+    entered = asyncio.Event()
+    swallowed = asyncio.Event()
+
+    async def stubborn_task(_task: dict) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            swallowed.set()
+            # Simulate badly behaved code that suppresses the first cancellation.
+            await asyncio.Event().wait()
+
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        shutdown_timeout_seconds=0.1,
+    )
+    scheduler.register_handler("stubborn", stubborn_task)
+    task_id = await scheduler.create_task(
+        "owner",
+        "stubborn",
+        {},
+        cron_expression="0 * * * *",
+    )
+    running = asyncio.create_task(scheduler.run_task(task_id))
+    await entered.wait()
+
+    await asyncio.wait_for(scheduler.stop(), timeout=0.5)
+    assert swallowed.is_set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+
 async def test_concurrent_notification_updates_do_not_overwrite_each_other(tmp_path):
     class YieldingSettingsDatabase(Database):
         async def fetch_notification_settings(self, user_id: str):
