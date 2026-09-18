@@ -79,12 +79,14 @@ class GitHubTracker:
         dispatcher=None,
         notifications=None,
         timezone_name: str = "Asia/Shanghai",
+        outbound_max_attempts: int = 3,
     ):
         self._db = db
         self._client = client
         self._dispatcher = dispatcher
         self._notifications = notifications or NotificationSettingsService(db)
         self._timezone = ZoneInfo(timezone_name)
+        self._outbound_max_attempts = max(1, int(outbound_max_attempts))
         self._repo_check_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -110,26 +112,14 @@ class GitHubTracker:
         return await self._check_row(repo)
 
     async def run_scheduled_check(self, task: dict) -> None:
+        del task
         if self._dispatcher is None:
             raise GitHubTrackerError("GitHub 通知未配置消息发送器")
         for repo in await self._db.fetch_github_repositories():
             try:
-                result = await self._check_row(repo)
+                await self._check_row(repo, queue_notifications=True)
             except Exception:
                 logger.exception("GitHub 检查失败 repo_id=%s", repo["id"])
-                continue
-            if not result["changes"]:
-                continue
-            settings = await self._notifications.get(repo["owner_id"])
-            if not settings["github_notify"]:
-                continue
-            message = format_check_result(result)
-            for target in await self._db.fetch_github_notifications(repo["id"]):
-                sender = self._dispatcher.enqueue_user if target["target_type"] == "user" else self._dispatcher.enqueue_group
-                try:
-                    await sender(target["target_id"], message)
-                except Exception:
-                    logger.exception("GitHub 通知发送失败 repo_id=%s target=%s:%s", repo["id"], target["target_type"], target["target_id"])
 
     async def run_scheduled_digest(self, task: dict) -> None:
         """定时汇总所有仓库的最新 commit，并把同一份消息私发给配置收件人。"""
@@ -174,7 +164,7 @@ class GitHubTracker:
                     "GitHub 汇总发送失败 target=%s:%s", target["target_type"], target["target_id"]
                 )
 
-    async def _check_row(self, repo: dict) -> dict:
+    async def _check_row(self, repo: dict, *, queue_notifications: bool = False) -> dict:
         repo_id = int(repo["id"])
         lock = self._repo_check_locks.setdefault(repo_id, asyncio.Lock())
         async with lock:
@@ -183,8 +173,34 @@ class GitHubTracker:
             )
             previous = await self._db.fetch_latest_github_snapshot(repo_id)
             changes = compare_snapshots(previous, snapshot)
-            await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
-            return {"repo": repo, "snapshot": snapshot, "changes": changes}
+            result = {"repo": repo, "snapshot": snapshot, "changes": changes}
+
+            deliveries: list[dict] = []
+            if queue_notifications and changes:
+                settings = await self._notifications.get(repo["owner_id"])
+                if settings["github_notify"]:
+                    message = format_check_result(result)
+                    deliveries = [
+                        {
+                            "target_type": target["target_type"],
+                            "target_id": target["target_id"],
+                            "content": message,
+                        }
+                        for target in await self._db.fetch_github_notifications(repo_id)
+                    ]
+
+            if deliveries:
+                await self._db.insert_github_snapshot_and_outbound(
+                    repo_id,
+                    snapshot.to_dict(),
+                    deliveries,
+                    self._outbound_max_attempts,
+                )
+                if self._dispatcher is not None:
+                    self._dispatcher.notify_queue_changed()
+            else:
+                await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
+            return result
 
     async def watch(self, owner_id: str, url: str, target: str) -> None:
         repo = await self._get_owned_repository(owner_id, url)

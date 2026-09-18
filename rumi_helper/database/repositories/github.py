@@ -1,5 +1,8 @@
 """Database methods for GitHubRepository."""
 
+from rumi_helper.database.repositories.common import _now
+
+
 class GitHubRepository:
     async def insert_github_repository(
         self, owner_id: str, repo_owner: str, repo_name: str, repo_url: str
@@ -79,29 +82,67 @@ class GitHubRepository:
                 await self.conn.rollback()
                 raise
 
+    async def _insert_github_snapshot_unlocked(self, repo_id: int, snapshot: dict) -> int:
+        cursor = await self.conn.execute(
+            "INSERT INTO github_snapshots "
+            "(repo_id, stars, forks, watchers, commits_count, latest_commit_sha, latest_commit_message, "
+            "latest_commit_author, latest_commit_time, latest_release, open_issues_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                repo_id,
+                snapshot["stars"],
+                snapshot["forks"],
+                snapshot["watchers"],
+                snapshot["commits_count"],
+                snapshot["latest_commit_sha"],
+                snapshot["latest_commit_message"],
+                snapshot["latest_commit_author"],
+                snapshot["latest_commit_time"],
+                snapshot["latest_release"],
+                snapshot["open_issues_count"],
+            ),
+        )
+        return int(cursor.lastrowid)
+
     async def insert_github_snapshot(self, repo_id: int, snapshot: dict) -> int:
         async with self.operation():
-            cursor = await self.conn.execute(
-                "INSERT INTO github_snapshots "
-                "(repo_id, stars, forks, watchers, commits_count, latest_commit_sha, latest_commit_message, "
-                "latest_commit_author, latest_commit_time, latest_release, open_issues_count) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    repo_id,
-                    snapshot["stars"],
-                    snapshot["forks"],
-                    snapshot["watchers"],
-                    snapshot["commits_count"],
-                    snapshot["latest_commit_sha"],
-                    snapshot["latest_commit_message"],
-                    snapshot["latest_commit_author"],
-                    snapshot["latest_commit_time"],
-                    snapshot["latest_release"],
-                    snapshot["open_issues_count"],
-                ),
-            )
+            snapshot_id = await self._insert_github_snapshot_unlocked(repo_id, snapshot)
             await self.conn.commit()
-            return int(cursor.lastrowid)
+            return snapshot_id
+
+    async def insert_github_snapshot_and_outbound(
+        self,
+        repo_id: int,
+        snapshot: dict,
+        deliveries: list[dict],
+        max_attempts: int,
+    ) -> int:
+        """Atomically advance the GitHub snapshot and queue every derived notification."""
+        async with self.operation():
+            try:
+                snapshot_id = await self._insert_github_snapshot_unlocked(repo_id, snapshot)
+                if deliveries:
+                    next_attempt_at = _now()
+                    await self.conn.executemany(
+                        "INSERT INTO outbound_messages "
+                        "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        [
+                            (
+                                str(delivery["target_type"]),
+                                str(delivery["target_id"]),
+                                str(delivery["content"]),
+                                max(1, int(max_attempts)),
+                                next_attempt_at,
+                            )
+                            for delivery in deliveries
+                        ],
+                    )
+                await self.conn.commit()
+                return snapshot_id
+            except Exception:
+                await self.conn.rollback()
+                raise
 
     async def fetch_latest_github_snapshot(self, repo_id: int) -> dict | None:
         return await self.fetchone(

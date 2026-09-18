@@ -232,6 +232,7 @@ class FakeDispatcher:
     def __init__(self):
         self.calls: list[tuple[str, str, str]] = []
         self.enqueued: list[tuple[str, str, str]] = []
+        self.wake_calls = 0
 
     async def send_user(self, user_id: str, message: str):
         self.calls.append(("user", user_id, message))
@@ -247,6 +248,9 @@ class FakeDispatcher:
         self.enqueued.append(("group", group_id, message))
         return 1
 
+    def notify_queue_changed(self):
+        self.wake_calls += 1
+
 
 async def test_scheduled_check_sends_only_when_github_notifications_are_enabled(db):
     client = FakeGitHubClient(_snapshot("first"))
@@ -260,13 +264,77 @@ async def test_scheduled_check_sends_only_when_github_notifications_are_enabled(
     client.snapshot = _snapshot("second", stars=2)
     await tracker.run_scheduled_check({})
     assert dispatcher.calls == []
+    assert dispatcher.wake_calls == 0
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
 
     await notifications.set("user-1", github_notify=True)
     client.snapshot = _snapshot("third", stars=3)
     await tracker.run_scheduled_check({})
 
-    assert dispatcher.enqueued and dispatcher.enqueued[0][0:2] == ("user", "999")
-    assert "OpenAI/openai-python" in dispatcher.enqueued[0][2]
+    outbound = await db.fetchone(
+        "SELECT target_type, target_id, content, max_attempts, status FROM outbound_messages",
+        (),
+    )
+    assert outbound is not None
+    assert outbound["target_type"] == "user"
+    assert outbound["target_id"] == "999"
+    assert outbound["max_attempts"] == 3
+    assert outbound["status"] == "pending"
+    assert "OpenAI/openai-python" in outbound["content"]
+    assert dispatcher.wake_calls == 1
+
+
+async def test_scheduled_check_rolls_back_snapshot_if_outbox_insert_fails(db):
+    client = FakeGitHubClient(_snapshot("first"))
+    dispatcher = FakeDispatcher()
+    notifications = NotificationSettingsService(db)
+    await notifications.set("user-1", github_notify=True)
+    tracker = GitHubTracker(
+        db,
+        client,
+        dispatcher,
+        notifications,
+        outbound_max_attempts=7,
+    )
+    repo = await tracker.add_repository("user-1", "https://github.com/OpenAI/openai-python")
+    await tracker.watch("user-1", repo["repo_url"], "user:999")
+    await tracker.check("user-1", repo["repo_url"])
+
+    await db.execute(
+        "CREATE TRIGGER reject_github_outbox BEFORE INSERT ON outbound_messages "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+    client.snapshot = _snapshot("second", stars=2)
+    await tracker.run_scheduled_check({})
+
+    latest = await db.fetch_latest_github_snapshot(repo["id"])
+    assert latest is not None and latest["latest_commit_sha"] == "first"
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+    await db.execute("DROP TRIGGER reject_github_outbox", ())
+    await tracker.run_scheduled_check({})
+
+    latest = await db.fetch_latest_github_snapshot(repo["id"])
+    assert latest is not None and latest["latest_commit_sha"] == "second"
+    outbound = await db.fetchone(
+        "SELECT target_type, target_id, max_attempts, status FROM outbound_messages",
+        (),
+    )
+    assert outbound == {
+        "target_type": "user",
+        "target_id": "999",
+        "max_attempts": 7,
+        "status": "pending",
+    }
+    assert dispatcher.wake_calls == 1
 
 
 async def test_scheduled_digest_sends_latest_commit_to_all_configured_users(db):
