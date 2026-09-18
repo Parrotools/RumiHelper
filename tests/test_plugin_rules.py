@@ -396,6 +396,51 @@ async def test_admin_status_requests_operational_diagnostics(monkeypatch):
     assert calls == [True]
 
 
+
+
+async def test_admin_status_in_group_uses_public_view(monkeypatch):
+    calls: list[bool] = []
+    sent: list[str] = []
+
+    class FakeHealth:
+        async def check(self, *, include_diagnostics: bool = True):
+            calls.append(include_diagnostics)
+            return {
+                "uptime_seconds": 1,
+                "database": {"ok": True},
+                "llm": {"ok": True},
+                "github": {"ok": True},
+                "scheduler": {"running": True, "jobs": 9},
+                "counts": {
+                    "github_repositories": 7,
+                    "memories": 11,
+                },
+                "recent_errors": [{"error": "internal operational detail"}],
+            }
+
+    runtime = SimpleNamespace(
+        health=FakeHealth(),
+        permission=SimpleNamespace(is_admin=lambda _user_id: True),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message):
+        sent.append(message)
+
+    monkeypatch.setattr(admin_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(admin_plugin, "send_local_reply", fake_send_local_reply)
+
+    await admin_plugin._handle(
+        _group_event("/status", at=True, user=20000, mid=406),
+        SimpleNamespace(),
+    )
+
+    assert calls == [False]
+    assert sent and "服务：正常" in sent[0]
+    assert "GitHub 监控" not in sent[0]
+    assert "Memory" not in sent[0]
+    assert "internal operational detail" not in sent[0]
+
+
 async def test_github_list_in_group_refuses_private_configuration(monkeypatch):
     sent: list[str] = []
 

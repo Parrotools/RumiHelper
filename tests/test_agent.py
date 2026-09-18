@@ -629,6 +629,31 @@ async def test_agent_admin_status_requests_diagnostics(db):
     assert runtime.health.include_diagnostics_calls == [True]
 
 
+
+
+@pytest.mark.asyncio
+async def test_agent_admin_status_in_group_uses_public_view(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"status","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="admin", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="看看机器人状态",
+    )
+
+    assert result is not None
+    assert "服务：正常" in result.message
+    assert "GitHub 监控" not in result.message
+    assert "Memory" not in result.message
+    assert runtime.health.include_diagnostics_calls == [False]
+
+
 @pytest.mark.asyncio
 async def test_agent_cannot_clear_shared_group_session_as_non_admin(db):
     runtime = _runtime(

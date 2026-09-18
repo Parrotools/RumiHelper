@@ -189,8 +189,11 @@ async def clear_session(runtime: Any, user_id: str, arguments: dict[str, Any], s
 
 
 async def status(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del arguments, session_key
-    detailed = runtime.permission.is_admin(user_id)
+    del arguments
+    detailed = (
+        runtime.permission.is_admin(user_id)
+        and not session_key.startswith("group:")
+    )
     health = await runtime.health.check(include_diagnostics=detailed)
     return format_status(health, detailed=detailed)
 

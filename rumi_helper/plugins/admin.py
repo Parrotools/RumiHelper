@@ -1,7 +1,7 @@
 """管理员/通用插件：/status 查看运行状态（不含任何密钥）。"""
 
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import MessageEvent
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 from nonebot.matcher import Matcher
 from nonebot.rule import Rule
 
@@ -31,7 +31,10 @@ status_matcher = on_message(rule=Rule(_status_trigger), priority=5, block=True)
 @status_matcher.handle()
 async def _handle(event: MessageEvent, matcher_: Matcher):
     runtime = get_runtime()
-    detailed = runtime.permission.is_admin(str(event.user_id))
+    detailed = (
+        runtime.permission.is_admin(str(event.user_id))
+        and not isinstance(event, GroupMessageEvent)
+    )
     status = await runtime.health.check(include_diagnostics=detailed)
     await send_local_reply(
         matcher_,
