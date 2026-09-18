@@ -2,6 +2,8 @@
 
 import json
 
+from rumi_helper.database.repositories.common import _now
+
 
 class SchedulerRepository:
     async def create_scheduled_task(
@@ -60,16 +62,50 @@ class SchedulerRepository:
     async def insert_scheduled_content_history(self, task_id: int, content: str) -> None:
         async with self.operation():
             try:
+                await self._insert_scheduled_content_history_unlocked(task_id, content)
+                await self.conn.commit()
+            except Exception:
+                await self.conn.rollback()
+                raise
+
+    async def _insert_scheduled_content_history_unlocked(
+        self,
+        task_id: int,
+        content: str,
+    ) -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO scheduled_content_history (task_id, content) VALUES (?, ?)",
+            (task_id, content),
+        )
+        await self.conn.execute(
+            "DELETE FROM scheduled_content_history WHERE task_id = ? AND id NOT IN ("
+            "  SELECT id FROM scheduled_content_history WHERE task_id = ? "
+            "  ORDER BY id DESC LIMIT 20"
+            ")",
+            (task_id, task_id),
+        )
+
+    async def record_scheduled_content_and_enqueue_group(
+        self,
+        task_id: int,
+        group_id: str,
+        content: str,
+        max_attempts: int,
+    ) -> None:
+        """Atomically record generated content and queue its group delivery."""
+        async with self.operation():
+            try:
+                await self._insert_scheduled_content_history_unlocked(task_id, content)
                 await self.conn.execute(
-                    "INSERT OR IGNORE INTO scheduled_content_history (task_id, content) VALUES (?, ?)",
-                    (task_id, content),
-                )
-                await self.conn.execute(
-                    "DELETE FROM scheduled_content_history WHERE task_id = ? AND id NOT IN ("
-                    "  SELECT id FROM scheduled_content_history WHERE task_id = ? "
-                    "  ORDER BY id DESC LIMIT 20"
-                    ")",
-                    (task_id, task_id),
+                    "INSERT INTO outbound_messages "
+                    "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                    "VALUES ('group', ?, ?, ?, ?)",
+                    (
+                        str(group_id),
+                        str(content),
+                        max(1, int(max_attempts)),
+                        _now(),
+                    ),
                 )
                 await self.conn.commit()
             except Exception:

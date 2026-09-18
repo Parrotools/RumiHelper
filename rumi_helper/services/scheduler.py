@@ -44,6 +44,7 @@ class SchedulerService:
         timezone_name: str = "UTC",
         llm: LLMProvider | None = None,
         shutdown_timeout_seconds: float = 10.0,
+        outbound_max_attempts: int = 3,
     ):
         try:
             self._timezone = ZoneInfo(timezone_name)
@@ -57,6 +58,7 @@ class SchedulerService:
         self._started = False
         self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self._shutdown_cancel_grace_seconds = min(1.0, self._shutdown_timeout_seconds)
+        self._outbound_max_attempts = max(1, int(outbound_max_attempts))
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
@@ -366,8 +368,13 @@ class SchedulerService:
         if not content:
             raise SchedulerValidationError("未能生成与历史不同的段子")
 
-        await self._dispatcher.enqueue_group(target_id, content)
-        await self._db.insert_scheduled_content_history(task["id"], content)
+        await self._db.record_scheduled_content_and_enqueue_group(
+            task["id"],
+            target_id,
+            content,
+            self._outbound_max_attempts,
+        )
+        self._dispatcher.notify_queue_changed()
 
     @staticmethod
     def _job_id(task_id: int) -> str:

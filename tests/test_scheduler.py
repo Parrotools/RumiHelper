@@ -27,6 +27,7 @@ class FakeDispatcher:
     def __init__(self):
         self.calls: list[tuple[str, str, str]] = []
         self.enqueued: list[tuple[str, str, str]] = []
+        self.wake_calls = 0
 
     async def send_user(self, user_id: str, message: str):
         self.calls.append(("user", user_id, message))
@@ -38,6 +39,9 @@ class FakeDispatcher:
     async def enqueue_group(self, group_id: str, message: str):
         self.enqueued.append(("group", group_id, message))
         return 1
+
+    def notify_queue_changed(self):
+        self.wake_calls += 1
 
 
 class FakeLLM:
@@ -157,11 +161,75 @@ async def test_create_and_run_topic_joke_avoids_history(db):
 
     await scheduler.run_task(task_id)
 
-    assert dispatcher.enqueued == [("group", "30000", "今天的新段子")]
+    assert dispatcher.enqueued == []
+    outbound = await db.fetchone(
+        "SELECT target_type, target_id, content, status FROM outbound_messages",
+        (),
+    )
+    assert outbound == {
+        "target_type": "group",
+        "target_id": "30000",
+        "content": "今天的新段子",
+        "status": "pending",
+    }
+    assert dispatcher.wake_calls == 1
     assert len(llm.calls) == 3
     history = await db.fetch_scheduled_content_history(task_id)
     assert history[:2] == ["今天的新段子", "昨天的旧段子"]
     assert "昨天的旧段子" in llm.calls[0][1]["content"]
+
+
+async def test_topic_joke_history_and_outbox_roll_back_together(db):
+    dispatcher = FakeDispatcher()
+    llm = FakeLLM(["今天的新段子", "今天的新段子"])
+    scheduler = SchedulerService(
+        db,
+        dispatcher,
+        timezone_name="UTC",
+        llm=llm,
+        outbound_max_attempts=7,
+    )
+    task_id = await scheduler.create_topic_joke(
+        "admin-1",
+        "30000",
+        "mobile",
+        cron_expression="0 12 * * *",
+    )
+    await db.execute(
+        "CREATE TRIGGER reject_topic_joke_outbox BEFORE INSERT ON outbound_messages "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+
+    await scheduler.run_task(task_id)
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM scheduled_content_history WHERE task_id = ?",
+        (task_id,),
+    ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+    await db.execute("DROP TRIGGER reject_topic_joke_outbox", ())
+    await scheduler.run_task(task_id)
+
+    outbound = await db.fetchone(
+        "SELECT target_type, target_id, content, max_attempts, status "
+        "FROM outbound_messages",
+        (),
+    )
+    assert outbound == {
+        "target_type": "group",
+        "target_id": "30000",
+        "content": "今天的新段子",
+        "max_attempts": 7,
+        "status": "pending",
+    }
+    assert await db.fetch_scheduled_content_history(task_id) == ["今天的新段子"]
+    assert dispatcher.wake_calls == 1
 
 
 async def test_reminder_does_not_send_when_notifications_are_off(db):

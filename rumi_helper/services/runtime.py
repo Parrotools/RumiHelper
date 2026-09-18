@@ -134,6 +134,7 @@ async def _init_runtime_unlocked() -> Runtime:
             dispatcher,
             timezone_name=settings.scheduler_timezone,
             llm=llm,
+            outbound_max_attempts=settings.outbound_max_attempts,
         )
         stack.push_async_callback(scheduler.stop)
         scheduler.register_handler("github_check", github.run_scheduled_check)
