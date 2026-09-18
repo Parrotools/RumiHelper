@@ -1,6 +1,6 @@
 """Database methods for ReportRepository."""
 
-from rumi_helper.database.repositories.common import _now
+from rumi_helper.database.repositories.common import _now, _outbound_content
 
 
 class ReportRepository:
@@ -89,7 +89,7 @@ class ReportRepository:
                             "VALUES ('user', ?, ?, ?, ?)",
                             (
                                 owner_id,
-                                delivery_content,
+                                _outbound_content(delivery_content),
                                 max(1, int(max_attempts)),
                                 next_attempt_at,
                             ),

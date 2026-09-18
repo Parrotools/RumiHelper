@@ -1,6 +1,6 @@
 """Database methods for OutboundRepository."""
 
-from rumi_helper.database.repositories.common import _now
+from rumi_helper.database.repositories.common import _now, _outbound_content
 
 
 class OutboundRepository:
@@ -16,7 +16,13 @@ class OutboundRepository:
             cursor = await self.conn.execute(
                 "INSERT INTO outbound_messages "
                 "(target_type, target_id, content, max_attempts, next_attempt_at) VALUES (?, ?, ?, ?, ?)",
-                (target_type, target_id, content, max_attempts, not_before or _now()),
+                (
+                    target_type,
+                    target_id,
+                    _outbound_content(content),
+                    max_attempts,
+                    not_before or _now(),
+                ),
             )
             await self.conn.commit()
             return int(cursor.lastrowid)
@@ -41,7 +47,7 @@ class OutboundRepository:
                         (
                             str(delivery["target_type"]),
                             str(delivery["target_id"]),
-                            str(delivery["content"]),
+                            _outbound_content(delivery["content"]),
                             max(1, int(max_attempts)),
                             next_attempt_at,
                         )

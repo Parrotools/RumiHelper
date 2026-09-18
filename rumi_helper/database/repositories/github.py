@@ -1,6 +1,6 @@
 """Database methods for GitHubRepository."""
 
-from rumi_helper.database.repositories.common import _now
+from rumi_helper.database.repositories.common import _now, _outbound_content
 
 
 class GitHubRepository:
@@ -188,7 +188,7 @@ class GitHubRepository:
                             (
                                 str(delivery["target_type"]),
                                 str(delivery["target_id"]),
-                                str(delivery["content"]),
+                                _outbound_content(delivery["content"]),
                                 max(1, int(max_attempts)),
                                 next_attempt_at,
                             )

@@ -2,7 +2,7 @@
 
 import json
 
-from rumi_helper.database.repositories.common import _now
+from rumi_helper.database.repositories.common import _now, _outbound_content
 
 
 class SchedulerRepository:
@@ -191,7 +191,7 @@ class SchedulerRepository:
                     "VALUES ('group', ?, ?, ?, ?)",
                     (
                         str(group_id),
-                        str(content),
+                        _outbound_content(content),
                         max(1, int(max_attempts)),
                         _now(),
                     ),
