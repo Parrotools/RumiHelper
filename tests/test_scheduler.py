@@ -570,24 +570,61 @@ async def test_restart_drops_one_time_misfire_beyond_grace(db):
     assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is None
 
 
-async def test_start_refreshes_persisted_next_run_for_cron_task(db):
+async def test_start_preserves_persisted_cron_occurrence_marker(db):
     scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    persisted = "2000-01-01T00:00:00+00:00"
     task_id = await db.create_scheduled_task(
         "admin-1",
         "group_message",
         {"target_type": "group", "target_id": "30000", "message": "hello"},
         "0 * * * *",
-        "2000-01-01T00:00:00+00:00",
+        persisted,
     )
-    before = datetime.now(UTC)
 
     await scheduler.start()
     try:
-        refreshed = await db.fetch_scheduled_task(task_id)
-        next_run = datetime.fromisoformat(refreshed["next_run"])
-        assert next_run > before
+        restored = await db.fetch_scheduled_task(task_id)
+        assert restored["next_run"] == persisted
+        assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is not None
     finally:
         await scheduler.stop()
+
+
+async def test_new_process_start_does_not_steal_due_occurrence(tmp_path):
+    path = str(tmp_path / "scheduler-start-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    calls: list[str] = []
+    try:
+        due = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        task_id = await first_db.create_scheduled_task(
+            "owner",
+            "probe",
+            {},
+            "0 * * * *",
+            due,
+        )
+
+        async def handler(_task: dict) -> None:
+            calls.append("ran")
+
+        first = SchedulerService(first_db, FakeDispatcher(), timezone_name="UTC")
+        second = SchedulerService(second_db, FakeDispatcher(), timezone_name="UTC")
+        first.register_handler("probe", handler)
+        second.register_handler("probe", handler)
+
+        await second.start()
+        try:
+            await first.run_task(task_id, force=False)
+        finally:
+            await second.stop()
+
+        assert calls == ["ran"]
+    finally:
+        await first_db.close()
+        await second_db.close()
 
 
 async def test_concurrent_processes_claim_same_scheduled_occurrence_once(tmp_path):

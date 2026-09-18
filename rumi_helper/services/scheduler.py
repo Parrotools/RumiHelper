@@ -119,15 +119,10 @@ class SchedulerService:
         if self._started:
             return
         for task in await self._db.fetch_enabled_scheduled_tasks():
-            if task["cron_expression"]:
-                next_run = self._next_cron_run(task["cron_expression"])
-                await self._db.update_scheduled_task_schedule(
-                    task["id"],
-                    task["cron_expression"],
-                    next_run.isoformat(),
-                    True,
-                )
-                task = {**task, "next_run": next_run.isoformat()}
+            # Do not rewrite persisted cron next_run during startup. It is the
+            # cross-process CAS marker for the current occurrence; advancing it
+            # here could make a newly started process steal an occurrence that
+            # another process is about to claim.
             if not self._schedule(task):
                 await self._db.mark_scheduled_task_run(
                     task["id"],
