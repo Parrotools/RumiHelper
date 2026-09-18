@@ -173,3 +173,37 @@ def test_doctor_rejects_occupied_bind_port(tmp_path):
         )
 
     assert statuses["bind_available"] == "FAIL"
+
+
+def test_doctor_rejects_http_web_proxy(tmp_path):
+    checks = run_checks(
+        _settings(tmp_path, web_proxy_url="http://127.0.0.1:7897")
+    )
+    statuses = _statuses(checks)
+    assert statuses["web_proxy"] == "FAIL"
+
+
+def test_doctor_rejects_web_proxy_with_path(tmp_path):
+    checks = run_checks(
+        _settings(tmp_path, web_proxy_url="socks5://127.0.0.1:7897/not-valid")
+    )
+    statuses = _statuses(checks)
+    assert statuses["web_proxy"] == "FAIL"
+
+
+def test_doctor_accepts_socks5_web_proxy_without_echoing_credentials(tmp_path):
+    checks = run_checks(
+        _settings(
+            tmp_path,
+            web_proxy_url="socks5://user:super-secret@127.0.0.1:7897",
+        )
+    )
+    status = next(check for check in checks if check.name == "web_proxy")
+    assert status.status == "PASS"
+    assert "super-secret" not in status.detail
+
+
+def test_doctor_warns_when_playwright_enabled(tmp_path):
+    checks = run_checks(_settings(tmp_path, enable_playwright=True))
+    statuses = _statuses(checks)
+    assert statuses["playwright_ssrf"] == "WARN"

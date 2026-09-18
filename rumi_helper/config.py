@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     max_webpage_bytes: int = 4_194_304
     web_fetch_timeout_connect: float = 10.0
     web_fetch_timeout_read: float = 30.0
+    # SSRF-safe web proxy. Only SOCKS5 is accepted because HTTP CONNECT
+    # cannot preserve the original TLS SNI when the request URL is pinned to an IP.
+    web_proxy_url: str = ""
     web_summary_chunk_chars: int = 4000
     web_summary_max_chunks: int = 8
     enable_playwright: bool = False

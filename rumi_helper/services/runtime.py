@@ -153,6 +153,7 @@ async def _init_runtime_unlocked() -> Runtime:
             connect_timeout=settings.web_fetch_timeout_connect,
             read_timeout=settings.web_fetch_timeout_read,
             cache_ttl=settings.web_cache_ttl_seconds,
+            proxy_url=settings.web_proxy_url or None,
         )
         stack.push_async_callback(fetcher.aclose)
 
@@ -160,6 +161,7 @@ async def _init_runtime_unlocked() -> Runtime:
             PlaywrightFetcher(
                 max_bytes=settings.max_webpage_bytes,
                 navigation_timeout=settings.web_fetch_timeout_read,
+                proxy_url=settings.web_proxy_url or None,
             )
             if settings.enable_playwright
             else None

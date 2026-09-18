@@ -79,6 +79,7 @@ class WebFetcher:
         max_redirects: int = 5,
         user_agent: str = DEFAULT_USER_AGENT,
         cache_ttl: float = 600.0,
+        proxy_url: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self._max_bytes = max_bytes
@@ -86,12 +87,35 @@ class WebFetcher:
         self._cache_ttl = max(0.0, cache_ttl)
         self._cache: OrderedDict[str, tuple[float, FetchResult]] = OrderedDict()
         self._inflight: dict[str, asyncio.Task[FetchResult]] = {}
-        self._headers = {"User-Agent": user_agent, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}
+        self._headers = {
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+        }
+        proxy = self._normalize_proxy_url(proxy_url)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(read_timeout, connect=connect_timeout),
             follow_redirects=False,  # 必须手动逐跳校验 SSRF
+            proxy=proxy,
             transport=transport,
+            trust_env=False,
         )
+
+    @staticmethod
+    def _normalize_proxy_url(proxy_url: str | None) -> str | None:
+        value = str(proxy_url or "").strip()
+        if not value:
+            return None
+        try:
+            parsed = httpx.URL(value)
+        except httpx.InvalidURL as exc:
+            raise ValueError("WEB_PROXY_URL 无法解析") from exc
+        if parsed.scheme != "socks5" or not parsed.host:
+            raise ValueError(
+                "WEB_PROXY_URL 只支持 socks5://；HTTP CONNECT 无法在 IP pinning 下保留原域名 TLS SNI"
+            )
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("WEB_PROXY_URL 只能包含代理地址与可选认证信息，不能包含 path/query/fragment")
+        return value
 
     # ---------- URL 结果缓存 ----------
 
@@ -155,55 +179,73 @@ class WebFetcher:
             # 每一跳都重新解析并校验，并把实际 TCP 连接固定到本次已校验的
             # 公网 IP；Host/SNI 仍使用原域名，避免 DNS rebinding 的 TOCTOU。
             parsed, ips = await resolve_url_safe(current)
-            pinned_url = parsed.copy_with(host=str(ips[0]))
             host = parsed.host
             host_header = f"[{host}]" if ":" in host else host
             if parsed.port is not None:
                 host_header = f"{host_header}:{parsed.port}"
             headers = {**self._headers, "Host": host_header}
-            try:
-                async with self._client.stream(
-                    "GET",
-                    pinned_url,
-                    headers=headers,
-                    extensions={"sni_hostname": parsed.host},
-                ) as resp:
-                    status_code = resp.status_code
-                    if status_code in REDIRECT_STATUSES:
-                        location = resp.headers.get("location")
-                        if not location:
-                            raise FetchHTTPError(status_code, "重定向缺少 Location")
-                        redirects += 1
-                        if redirects > self._max_redirects:
-                            raise TooManyRedirectsError()
-                        current = str(httpx.URL(current).join(location))
-                        continue
 
-                    content_type_full = resp.headers.get("content-type", "")
-                    m = re.search(r"charset=([\w-]+)", content_type_full, re.IGNORECASE)
-                    charset = m.group(1) if m else "utf-8"
-                    if status_code >= 400:
-                        raise FetchHTTPError(status_code)
+            redirected = False
+            fetched = False
+            last_network_error: httpx.HTTPError | None = None
+            # DNS may return duplicate records; only retry distinct validated IPs.
+            for ip_text in dict.fromkeys(str(ip) for ip in ips):
+                pinned_url = parsed.copy_with(host=ip_text)
+                try:
+                    async with self._client.stream(
+                        "GET",
+                        pinned_url,
+                        headers=headers,
+                        extensions={"sni_hostname": parsed.host},
+                    ) as resp:
+                        status_code = resp.status_code
+                        if status_code in REDIRECT_STATUSES:
+                            location = resp.headers.get("location")
+                            if not location:
+                                raise FetchHTTPError(status_code, "重定向缺少 Location")
+                            redirects += 1
+                            if redirects > self._max_redirects:
+                                raise TooManyRedirectsError()
+                            current = str(httpx.URL(current).join(location))
+                            redirected = True
+                            break
 
-                    mime = content_type_full.split(";")[0].strip().lower()
-                    if mime and not _is_supported_content_type(mime):
-                        raise UnsupportedContentTypeError(mime)
+                        content_type_full = resp.headers.get("content-type", "")
+                        m = re.search(r"charset=([\w-]+)", content_type_full, re.IGNORECASE)
+                        charset = m.group(1) if m else "utf-8"
+                        if status_code >= 400:
+                            raise FetchHTTPError(status_code)
 
-                    declared = resp.headers.get("content-length")
-                    if declared and declared.isdigit() and int(declared) > self._max_bytes:
-                        raise PageTooLargeError()
+                        mime = content_type_full.split(";")[0].strip().lower()
+                        if mime and not _is_supported_content_type(mime):
+                            raise UnsupportedContentTypeError(mime)
 
-                    buf = bytearray()
-                    async for chunk in resp.aiter_bytes():
-                        buf.extend(chunk)
-                        if len(buf) > self._max_bytes:
+                        declared = resp.headers.get("content-length")
+                        if declared and declared.isdigit() and int(declared) > self._max_bytes:
                             raise PageTooLargeError()
-                    body = bytes(buf)
-            except httpx.TimeoutException as e:
-                raise FetchTimeoutError(str(e)) from e
-            except httpx.HTTPError as e:
-                raise FetchNetworkError(str(e)) from e
-            break
+
+                        buf = bytearray()
+                        async for chunk in resp.aiter_bytes():
+                            buf.extend(chunk)
+                            if len(buf) > self._max_bytes:
+                                raise PageTooLargeError()
+                        body = bytes(buf)
+                        fetched = True
+                        break
+                except httpx.TimeoutException as exc:
+                    last_network_error = exc
+                except httpx.HTTPError as exc:
+                    last_network_error = exc
+
+            if redirected:
+                continue
+            if fetched:
+                break
+            if isinstance(last_network_error, httpx.TimeoutException):
+                raise FetchTimeoutError(str(last_network_error)) from last_network_error
+            if last_network_error is not None:
+                raise FetchNetworkError(str(last_network_error)) from last_network_error
+            raise FetchNetworkError("没有可用的已校验目标地址")
 
         result = FetchResult(
             url=url,
@@ -222,9 +264,28 @@ class PlaywrightFetcher:
     需要自行安装：pip install .[playwright] && playwright install chromium
     """
 
-    def __init__(self, max_bytes: int = 4_194_304, navigation_timeout: float = 30.0):
+    def __init__(
+        self,
+        max_bytes: int = 4_194_304,
+        navigation_timeout: float = 30.0,
+        proxy_url: str | None = None,
+    ):
         self._max_bytes = max_bytes
         self._timeout_ms = int(navigation_timeout * 1000)
+        self._proxy_url = WebFetcher._normalize_proxy_url(proxy_url)
+
+    def _playwright_proxy_settings(self) -> dict[str, str] | None:
+        if not self._proxy_url:
+            return None
+        parsed = httpx.URL(self._proxy_url)
+        host = f"[{parsed.host}]" if ":" in parsed.host else parsed.host
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        settings = {"server": f"socks5://{host}{port}"}
+        if parsed.username:
+            settings["username"] = parsed.username
+        if parsed.password:
+            settings["password"] = parsed.password
+        return settings
 
     async def fetch(self, url: str) -> FetchResult:
         await assert_url_safe(url)  # Playwright 一样要过 SSRF 检查
@@ -237,7 +298,11 @@ class PlaywrightFetcher:
 
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                launch_kwargs = {"headless": True}
+                proxy_settings = self._playwright_proxy_settings()
+                if proxy_settings:
+                    launch_kwargs["proxy"] = proxy_settings
+                browser = await p.chromium.launch(**launch_kwargs)
                 try:
                     page = await browser.new_page(user_agent=DEFAULT_USER_AGENT)
                     blocked_error: SSRFBlockedError | None = None

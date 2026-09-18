@@ -228,7 +228,7 @@ ADMIN_QQ_IDS=111111,222222
 
 ## 10. 安全设计说明
 
-- **SSRF**：普通 `WebFetcher` 对每一跳先做 scheme + DNS/IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），随后把 TCP 连接固定到本次已校验的公网 IP，同时保留原域名的 Host/SNI，从而关闭 DNS rebinding 的校验-连接窗口；最多 5 跳，只允许 http/https，禁止 URL userinfo，响应体有大小上限。可选 Playwright fallback 会对浏览器每个 HTTP(S) 请求重新做 SSRF 校验，但 Chromium 无法复用同一套 IP pinning，因此其 DNS rebinding 防护弱于默认 WebFetcher；对高安全部署建议保持 `ENABLE_PLAYWRIGHT=false`。
+- **SSRF**：普通 `WebFetcher` 对每一跳先做 scheme + DNS/IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），随后把 TCP 连接固定到本次已校验的公网 IP，同时保留原域名的 Host/SNI，从而关闭 DNS rebinding 的校验-连接窗口；多个已校验公网 IP 会在网络失败时依次 fallback。网页抓取显式 `trust_env=false`，不会读取 `HTTP_PROXY` / `HTTPS_PROXY`；如需代理必须使用 `WEB_PROXY_URL=socks5://...`，因为普通 HTTP CONNECT 代理无法在 IP pinning 后可靠保留原域名 TLS SNI。可选 Playwright fallback 会对浏览器每个 HTTP(S) 请求重新做 SSRF 校验，但 Chromium 无法复用同一套 IP pinning，因此其 DNS rebinding 防护弱于默认 WebFetcher；对高安全部署建议保持 `ENABLE_PLAYWRIGHT=false`。
 - **Prompt Injection**：网页内容永远包在 `<untrusted_web_content>` 定界符内送入 LLM，system prompt 明确声明其中任何指令无效；总结链路代码中不存在 `MessageDispatcher` 引用，网页内容在架构上不可能触发 QQ 发送。
 - **发送权限**：`MessageDispatcher` 是唯一发送出口；核心聊天模型没有发送能力。自然语言 Agent 只能调用已注册的受限工具，管理员群发和定时群发仍需管理员权限及确认。
 - **Agent Harness**：LLM 只能返回白名单中的结构化工具名和参数；参数由业务代码再次校验。只读查询直接执行，记忆/通知/提醒/定时/清空/仓库变更/群发等写操作先写入 SQLite 待确认队列，确认后原子领取，避免重复执行。
@@ -277,7 +277,7 @@ cp .env.example .env   # 编辑后
 ```bash
 pip install -e ".[dev]"
 pytest        # 单测：URL / SSRF / 权限 / 解析器 / 会话 / 记忆 / Scheduler / GitHub / 分块 / LLM / 缓存 / Dispatcher / 插件触发规则 / 注入防御
-ruff check app tests
+ruff check rumi_helper tests
 ```
 
 ## 15. 后续路线
@@ -285,4 +285,5 @@ ruff check app tests
 - `GROUP_SHARED_CONTEXT=true`（已支持）群共享上下文
 - `ENABLE_PLAYWRIGHT=true`（已支持）JS 页面渲染兜底，抓取失败自动降级
 - `WEB_CACHE_TTL_SECONDS`（已支持）URL 抓取缓存
+- `WEB_PROXY_URL=socks5://...`（已支持）在保持 SSRF IP pinning + 原域名 TLS SNI 的前提下经 SOCKS5 抓取网页
 - 在真实 QQ/NapCat 上验收全部自然语言工具；后续新增业务能力继续复用同一套白名单、权限和确认流程

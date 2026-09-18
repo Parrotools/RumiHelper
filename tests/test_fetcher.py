@@ -308,3 +308,115 @@ async def test_fetch_pins_connection_to_validated_ip_and_keeps_host_sni(monkeypa
         "host_header": "example.com",
         "sni": "example.com",
     }
+
+
+def test_fetcher_rejects_http_proxy_url():
+    with pytest.raises(ValueError, match="只支持 socks5"):
+        WebFetcher(proxy_url="http://127.0.0.1:7897")
+
+
+def test_fetcher_rejects_proxy_url_with_request_path():
+    with pytest.raises(ValueError, match="path/query/fragment"):
+        WebFetcher(proxy_url="socks5://127.0.0.1:7897/not-a-proxy-path?x=1")
+
+
+async def test_fetch_retries_next_validated_ip_after_network_failure(monkeypatch):
+    import ipaddress
+
+    from rumi_helper.security import ssrf
+
+    async def fake_resolve(_host: str):
+        return [
+            ipaddress.ip_address("93.184.216.34"),
+            ipaddress.ip_address("1.1.1.1"),
+            ipaddress.ip_address("1.1.1.1"),
+        ]
+
+    monkeypatch.setattr(ssrf, "resolve_host", fake_resolve)
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        if request.url.host == "93.184.216.34":
+            raise httpx.ConnectError("first IP failed", request=request)
+        return _resp(
+            200,
+            HTML,
+            {"content-type": "text/html; charset=utf-8"},
+            request,
+        )
+
+    fetcher = WebFetcher(cache_ttl=0, transport=httpx.MockTransport(handler))
+    try:
+        result = await fetcher.fetch("https://example.com/retry")
+    finally:
+        await fetcher.aclose()
+
+    assert result.status_code == 200
+    assert seen == ["93.184.216.34", "1.1.1.1"]
+
+
+async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
+    captured: dict = {}
+
+    class FakePage:
+        url = "https://example.com/"
+
+        async def route(self, *_args, **_kwargs):
+            return None
+
+        async def goto(self, *_args, **_kwargs):
+            return None
+
+        async def content(self):
+            return "<html><body>ok</body></html>"
+
+    class FakeBrowser:
+        async def new_page(self, **_kwargs):
+            return FakePage()
+
+        async def close(self):
+            return None
+
+    class FakeChromium:
+        async def launch(self, **kwargs):
+            captured.update(kwargs)
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakeContext:
+        async def __aenter__(self):
+            return FakePlaywright()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async_api = ModuleType("playwright.async_api")
+    async_api.Error = RuntimeError
+    async_api.TimeoutError = TimeoutError
+    async_api.async_playwright = FakeContext
+    playwright = ModuleType("playwright")
+    playwright.async_api = async_api
+    monkeypatch.setitem(sys.modules, "playwright", playwright)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
+
+    async def allow_url(_url: str):
+        return None
+
+    monkeypatch.setattr(
+        "rumi_helper.services.web.fetcher.assert_url_safe",
+        allow_url,
+    )
+
+    result = await PlaywrightFetcher(
+        proxy_url="socks5://user:secret@127.0.0.1:7897"
+    ).fetch("https://example.com/")
+
+    assert result.status_code == 200
+    assert captured["proxy"] == {
+        "server": "socks5://127.0.0.1:7897",
+        "username": "user",
+        "password": "secret",
+    }

@@ -40,6 +40,7 @@ def run_checks(settings: Settings) -> list[DoctorCheck]:
     checks.append(_check_llm_url(settings))
     checks.extend(_check_credentials(settings))
     checks.extend(_check_transport_security(settings))
+    checks.extend(_check_web_fetch_security(settings))
     checks.append(_check_personality(settings))
     checks.append(_check_prompts())
     checks.extend(_check_scheduler(settings))
@@ -187,6 +188,49 @@ def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
         )
     else:
         checks.append(DoctorCheck("llm_transport", "PASS", "传输配置可接受"))
+    return checks
+
+
+def _check_web_fetch_security(settings: Settings) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+    proxy = settings.web_proxy_url.strip()
+    if not proxy:
+        checks.append(DoctorCheck("web_proxy", "PASS", "direct"))
+    else:
+        try:
+            parsed = httpx.URL(proxy)
+        except httpx.InvalidURL:
+            checks.append(DoctorCheck("web_proxy", "FAIL", "WEB_PROXY_URL 无法解析"))
+        else:
+            if parsed.scheme != "socks5" or not parsed.host:
+                checks.append(
+                    DoctorCheck(
+                        "web_proxy",
+                        "FAIL",
+                        "WEB_PROXY_URL 仅支持 socks5://，以保留 IP pinning 下的原域名 TLS SNI",
+                    )
+                )
+            elif parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+                checks.append(
+                    DoctorCheck(
+                        "web_proxy",
+                        "FAIL",
+                        "WEB_PROXY_URL 不能包含 path/query/fragment",
+                    )
+                )
+            else:
+                checks.append(DoctorCheck("web_proxy", "PASS", "SOCKS5 已配置"))
+
+    if settings.enable_playwright:
+        checks.append(
+            DoctorCheck(
+                "playwright_ssrf",
+                "WARN",
+                "Playwright 会逐请求校验 SSRF，但浏览器 DNS 无法与校验结果做同等级 IP pinning",
+            )
+        )
+    else:
+        checks.append(DoctorCheck("playwright_ssrf", "PASS", "disabled"))
     return checks
 
 

@@ -60,4 +60,4 @@
 - Modify: `README.md`, `.env.example`, `AGENTS.md`
 
 - [ ] Document Windows/Linux setup, NapCat reverse WebSocket settings, all environment variables, health endpoint, backups, and fault diagnosis.
-- [ ] Run `pytest -q`, `ruff check app tests`, `python -m compileall -q app tests`, plugin import, and temporary Runtime startup/shutdown smoke test.
+- [ ] Run `pytest -q`, `ruff check rumi_helper tests`, `python -m compileall -q rumi_helper tests`, plugin import, and temporary Runtime startup/shutdown smoke test.

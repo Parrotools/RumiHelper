@@ -154,14 +154,23 @@ jobs:
               name for name in names
               if name.endswith(".dist-info/entry_points.txt")
           ]
+          metadata_files = [
+              name for name in names
+              if name.endswith(".dist-info/METADATA")
+          ]
           if len(entry_points) != 1:
               raise SystemExit("wheel does not contain exactly one entry_points.txt")
+          if len(metadata_files) != 1:
+              raise SystemExit("wheel does not contain exactly one METADATA")
           with zipfile.ZipFile(wheel) as archive:
               text = archive.read(entry_points[0]).decode()
+              metadata = archive.read(metadata_files[0]).decode()
           if "rumi-helper = rumi_helper.cli:main" not in text:
               raise SystemExit("rumi-helper console entry point missing")
           if "rumi-doctor = rumi_helper.doctor:main" not in text:
               raise SystemExit("rumi-doctor console entry point missing")
+          if "Requires-Dist: httpx[socks]>=0.27.0" not in metadata:
+              raise SystemExit("wheel does not declare httpx SOCKS support")
           PY
 
       - name: Smoke installed wheel outside repository
@@ -176,8 +185,10 @@ jobs:
           env             DRIVER='~fastapi'             HOST=127.0.0.1             PORT=18081             DATABASE_PATH="$tmp/bot.db"             LLM_BASE_URL=http://127.0.0.1:9/v1             LLM_API_KEY=''             ADMIN_QQ_IDS=''             OWNER_QQ_ID=''             ONEBOT_ACCESS_TOKEN=smoke-token             GITHUB_CHECK_CRON=''             GITHUB_DIGEST_CRON=''             DAILY_REPORT_CRON=''             ENABLE_PLAYWRIGHT=false             rumi-doctor
 
           python - <<'PY'
+          import socksio
           import rumi_helper.cli as cli
 
+          assert socksio is not None
           paths = {route.path for route in cli.driver.server_app.routes}
           assert {"/livez", "/readyz", "/healthz"} <= paths
           PY

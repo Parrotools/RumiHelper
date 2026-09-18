@@ -190,7 +190,9 @@
 - 同一 URL 在 `WEB_CACHE_TTL_SECONDS`（默认 600 秒）内重复总结不会重新抓取。
 - 超长网页自动分块（`WEB_SUMMARY_CHUNK_CHARS`），分块摘要后合并；超过 `WEB_SUMMARY_MAX_CHUNKS` 段时截断并在结尾注明。
 - 目标网页是内网地址 / IP 保留段 / 非网页内容（如文件下载）会被拒绝。
-- 普通抓取失败且 `ENABLE_PLAYWRIGHT=true` 时，自动改用 Playwright 渲染后重试一次；浏览器的每个 HTTP(S) 请求在真正发出前都会重新做 SSRF 校验并阻断私网目标。
+- 默认 WebFetcher 会把实际连接固定到本次 DNS 校验通过的公网 IP，并保留原域名 Host/TLS SNI，关闭 DNS rebinding 的校验-连接窗口。
+- 如网络必须经过代理，请配置 `WEB_PROXY_URL=socks5://...`。网页抓取不会读取 `HTTP_PROXY` / `HTTPS_PROXY`；普通 HTTP CONNECT 代理无法在 IP pinning 后可靠保留原域名 TLS SNI，因此被明确拒绝。
+- 普通抓取失败且 `ENABLE_PLAYWRIGHT=true` 时，自动改用 Playwright 渲染后重试一次；浏览器的每个 HTTP(S) 请求会重新做 SSRF 校验，但 Chromium 无法做到与默认 WebFetcher 同等级的 DNS/IP pinning，因此高安全部署建议保持关闭。
 
 **错误提示对照**：
 
@@ -290,6 +292,7 @@ user:789012
 | `URL_AUTO_SUMMARY_MODE` | mentioned | off / mentioned / all |
 | `MAX_WEBPAGE_BYTES` | 4194304 | 单页最大字节数 |
 | `WEB_FETCH_TIMEOUT_CONNECT` / `_READ` | 10 / 30 | 抓取超时（秒） |
+| `WEB_PROXY_URL` | 空 | 网页抓取 SOCKS5 代理，例如 `socks5://127.0.0.1:7897`；HTTP(S) proxy 不支持 |
 | `WEB_SUMMARY_CHUNK_CHARS` | 4000 | 分块字符数 |
 | `WEB_SUMMARY_MAX_CHUNKS` | 8 | 最大分块数 |
 | `WEB_CACHE_TTL_SECONDS` | 600 | URL 缓存秒数（0 关闭） |
