@@ -251,12 +251,16 @@ class WebFetcher:
                 raise FetchNetworkError(str(last_network_error)) from last_network_error
             raise FetchNetworkError("没有可用的已校验目标地址")
 
+        try:
+            text = body.decode(charset, errors="replace")
+        except LookupError:
+            text = body.decode("utf-8", errors="replace")
         result = FetchResult(
             url=url,
             final_url=current,
             status_code=status_code,
             content_type=mime,
-            text=body.decode(charset, errors="replace"),
+            text=text,
         )
         self._cache_put(url, result)
         return result

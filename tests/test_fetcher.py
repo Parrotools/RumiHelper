@@ -36,6 +36,24 @@ async def test_fetch_html_ok():
     await f.aclose()
 
 
+async def test_unknown_charset_falls_back_to_utf8_replacement():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _resp(
+            200,
+            "中文正文".encode(),
+            {"content-type": "text/html; charset=definitely-not-a-codec"},
+            request,
+        )
+
+    f = WebFetcher(transport=httpx.MockTransport(handler))
+    try:
+        result = await f.fetch("https://example.com/charset")
+    finally:
+        await f.aclose()
+
+    assert result.text == "中文正文"
+
+
 async def test_content_type_whitelist():
     def handler(request: httpx.Request) -> httpx.Response:
         return _resp(200, b"binary", {"content-type": "application/octet-stream"}, request)
