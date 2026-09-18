@@ -74,7 +74,7 @@ async def test_outbound_queue_marks_message_failed_after_max_attempts(db):
     ) == {
         "status": "failed",
         "attempts": 2,
-        "last_error": "RuntimeError: permanent failure",
+        "last_error": "RuntimeError",
         "content": "",
     }
 
@@ -259,4 +259,4 @@ async def test_malformed_onebot_response_retries_instead_of_marking_sent(db):
     assert row["status"] == "retry"
     assert row["attempts"] == 1
     assert row["message_id"] is None
-    assert "message_id" in row["last_error"]
+    assert row["last_error"] == "ValueError"

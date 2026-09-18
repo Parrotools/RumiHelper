@@ -130,6 +130,28 @@ async def test_direct_send_respects_persisted_cooldown_after_restart(db):
     assert calls == 0
 
 
+
+
+async def test_send_failure_does_not_persist_upstream_exception_detail(db):
+    async def caller(action: str, **params):
+        raise RuntimeError("secret-token=abc123 path=/private/internal")
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+
+    result = await dispatcher.send_user("123", "hello")
+
+    assert result.success is False
+    assert result.error == "RuntimeError"
+    rows = await db.fetchall("SELECT error FROM send_logs")
+    assert rows == [{"error": "RuntimeError"}]
+    assert "secret-token" not in rows[0]["error"]
+    assert "/private/internal" not in rows[0]["error"]
+
+
 @pytest.mark.parametrize("response", [None, {}, "unexpected"])
 async def test_send_rejects_malformed_onebot_success_response(db, response):
     async def caller(action: str, **params):
@@ -143,8 +165,8 @@ async def test_send_rejects_malformed_onebot_success_response(db, response):
     result = await dispatcher.send_user("123", "hello")
 
     assert result.success is False
-    assert "message_id" in (result.error or "")
+    assert result.error == "ValueError"
     rows = await db.fetchall("SELECT success, error FROM send_logs")
     assert len(rows) == 1
     assert rows[0]["success"] == 0
-    assert "message_id" in rows[0]["error"]
+    assert rows[0]["error"] == "ValueError"

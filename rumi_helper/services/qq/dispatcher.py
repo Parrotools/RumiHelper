@@ -233,9 +233,9 @@ class MessageDispatcher:
             return result
         try:
             numeric_id = int(target_id)
-        except ValueError as e:
-            result = SendResult(target_type, target_id, False, error=f"无效的 QQ/群号：{target_id}")
-            logger.warning("发送失败 %s:%s %s", target_type, target_id, e)
+        except ValueError:
+            result = SendResult(target_type, target_id, False, error="InvalidTarget")
+            logger.warning("发送失败 type=%s id=%s error=InvalidTarget", target_type, target_id)
             await self._log(result, message)
             return result
 
@@ -258,13 +258,18 @@ class MessageDispatcher:
                 result.message_id,
             )
         except Exception as e:  # noqa: BLE001 —— 单目标失败必须被记录，不向外扩散
-            result = SendResult(target_type, target_id, False, error=f"{type(e).__name__}: {e}")
-            logger.warning("发送失败 type=%s id=%s %s", target_type, target_id, e)
-
-        if not result.success:
-            pause_seconds = self._pause_for_error(result.error)
+            raw_error = f"{type(e).__name__}: {e}"
+            pause_seconds = self._pause_for_error(raw_error)
             if pause_seconds > 0:
                 await self._persist_pause(pause_seconds)
+            safe_error = self._safe_error_label(raw_error, type(e).__name__)
+            result = SendResult(target_type, target_id, False, error=safe_error)
+            logger.warning(
+                "发送失败 type=%s id=%s error=%s",
+                target_type,
+                target_id,
+                safe_error,
+            )
         await self._log(result, message)
         return result
 
@@ -303,6 +308,20 @@ class MessageDispatcher:
         paused_until = (datetime.now(UTC) + timedelta(seconds=pause_seconds)).strftime("%Y-%m-%d %H:%M:%S")
         await self._db.extend_outbound_pause_until(paused_until)
         await self._db.defer_outbound_messages(paused_until)
+
+    @staticmethod
+    def _safe_error_label(error: str | None, fallback: str = "SendError") -> str:
+        """Reduce arbitrary upstream exception text to a non-sensitive persisted label."""
+        normalized = (error or "").lower()
+        if any(marker in normalized for marker in (
+            "kickedoffline", "登录态已失效", "请重新登录", "账号当前登录已失效", "账号状态变更为离线",
+        )):
+            return "AccountOffline"
+        if any(marker in normalized for marker in (
+            "429", "rate limit", "too many requests", "频繁", "限流",
+        )):
+            return "RateLimit"
+        return str(fallback or "SendError")[:80]
 
     def _pause_for_error(self, error: str | None) -> float:
         """账号失效或限流时熔断主动发送，避免重试造成更大压力。"""
