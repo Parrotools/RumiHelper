@@ -210,12 +210,18 @@ class GitHubRepository:
 
     async def upsert_github_notification(
         self, repo_id: int, target_type: str, target_id: str, enabled: bool = True
-    ) -> None:
-        await self.execute(
-            "INSERT INTO github_notifications (repo_id, target_type, target_id, enabled) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(repo_id, target_type, target_id) DO UPDATE SET enabled = excluded.enabled",
-            (repo_id, target_type, target_id, int(enabled)),
-        )
+    ) -> bool:
+        """Upsert only while the repository row still exists."""
+        async with self.operation(), self.conn.execute(
+            "INSERT INTO github_notifications (repo_id, target_type, target_id, enabled) "
+            "SELECT ?, ?, ?, ? "
+            "WHERE EXISTS (SELECT 1 FROM github_repositories WHERE id = ?) "
+            "ON CONFLICT(repo_id, target_type, target_id) DO UPDATE SET "
+            "enabled = excluded.enabled",
+            (repo_id, target_type, target_id, int(enabled), repo_id),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount > 0
 
     async def fetch_github_notifications(self, repo_id: int) -> list[dict]:
         return await self.fetchall(

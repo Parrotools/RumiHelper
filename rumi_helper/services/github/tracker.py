@@ -310,7 +310,12 @@ class GitHubTracker:
         target_type, separator, target_id = target.partition(":")
         if not separator or target_type not in ("user", "group") or not target_id.isdigit():
             raise GitHubTrackerError("通知目标应为 user:QQ号 或 group:群号")
-        await self._db.upsert_github_notification(repo["id"], target_type, target_id)
+        if not await self._db.upsert_github_notification(
+            repo["id"],
+            target_type,
+            target_id,
+        ):
+            raise GitHubTrackerError("该仓库已被删除，请重新添加后再设置通知")
 
     async def _get_owned_repository(self, owner_id: str, url: str) -> dict:
         ref = parse_repo_url(url)

@@ -876,3 +876,66 @@ async def test_check_does_not_recreate_snapshot_after_repository_is_deleted(db):
         "SELECT COUNT(*) AS count FROM outbound_messages",
         (),
     ) == {"count": 0}
+
+
+async def test_watch_cannot_create_orphan_notification_after_repository_delete(tmp_path):
+    reached_upsert = asyncio.Event()
+    release_upsert = asyncio.Event()
+
+    class BlockingWatchDatabase(Database):
+        async def upsert_github_notification(
+            self,
+            repo_id: int,
+            target_type: str,
+            target_id: str,
+            enabled: bool = True,
+        ) -> bool:
+            reached_upsert.set()
+            await release_upsert.wait()
+            return await super().upsert_github_notification(
+                repo_id,
+                target_type,
+                target_id,
+                enabled,
+            )
+
+    path = str(tmp_path / "github-watch-delete-race.db")
+    watch_db = BlockingWatchDatabase(path)
+    delete_db = Database(path)
+    await watch_db.connect()
+    await delete_db.connect()
+    try:
+        watch_tracker = GitHubTracker(
+            watch_db,
+            FakeGitHubClient(_snapshot("base")),
+        )
+        delete_tracker = GitHubTracker(
+            delete_db,
+            FakeGitHubClient(_snapshot("base")),
+        )
+        repo_url = "https://github.com/OpenAI/openai-python"
+        await watch_tracker.add_repository("user-1", repo_url)
+
+        watch_task = asyncio.create_task(
+            watch_tracker.watch("user-1", repo_url, "user:999")
+        )
+        await reached_upsert.wait()
+
+        assert await delete_tracker.remove_repository("user-1", repo_url) is True
+        release_upsert.set()
+
+        with pytest.raises(GitHubTrackerError, match="已被删除"):
+            await watch_task
+
+        assert await watch_db.fetchone(
+            "SELECT COUNT(*) AS count FROM github_repositories",
+            (),
+        ) == {"count": 0}
+        assert await watch_db.fetchone(
+            "SELECT COUNT(*) AS count FROM github_notifications",
+            (),
+        ) == {"count": 0}
+    finally:
+        release_upsert.set()
+        await watch_db.close()
+        await delete_db.close()
