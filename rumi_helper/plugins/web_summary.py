@@ -40,6 +40,23 @@ MAX_URLS_PER_MESSAGE = 3
 _GITHUB_AGENT_HINTS = (
     "添加", "加入", "移除", "删除", "监控", "列表", "检查", "查询", "查看信息", "watch", "add", "remove", "check", "info",
 )
+_AGENT_URL_ACTION_HINTS = (
+    "记住",
+    "保存到记忆",
+    "加入记忆",
+    "remember ",
+    "提醒我",
+    "定时提醒",
+    "remind me",
+    "群发",
+    "广播",
+    "发给 user:",
+    "发给 group:",
+    "发送给 user:",
+    "发送给 group:",
+    "定时发送",
+    "定时群发",
+)
 
 
 def _strip_command(text: str) -> str:
@@ -63,8 +80,9 @@ async def _trigger(event: MessageEvent) -> bool:
     # 其他斜杠命令（例如 /github add <URL>）交给对应命令插件，不能被 URL 自动总结抢走。
     if text.startswith("/") and not is_command:
         return False
-    # 带 GitHub URL 的明确操作交给 Agent Harness；否则“把这个仓库加入列表”会先被网页总结抢走。
-    if not is_command and _looks_like_github_operation(text):
+    # 带 URL 的明确业务操作交给 Agent Harness；否则 priority 更高的网页总结
+    # 会先 claim 消息，导致“记住链接 / 提醒我看链接 / 发链接”等工具请求无法执行。
+    if not is_command and _looks_like_agent_url_operation(text):
         return False
     mode = get_runtime().settings.url_auto_summary_mode
 
@@ -109,12 +127,23 @@ async def _handle(event: MessageEvent, matcher_: Matcher):
         await _summarize_one(matcher_, runtime, url, notice=is_command)
 
 
-def _looks_like_github_operation(text: str) -> bool:
+def _looks_like_agent_url_operation(text: str) -> bool:
     urls = extract_urls(text)
-    return bool(
+    if not urls:
+        return False
+    lowered = text.lower()
+    if (
         any("github.com" in url.lower() for url in urls)
-        and any(hint in text.lower() for hint in _GITHUB_AGENT_HINTS)
-    )
+        and any(hint in lowered for hint in _GITHUB_AGENT_HINTS)
+    ):
+        return True
+    if any(hint in lowered for hint in _AGENT_URL_ACTION_HINTS):
+        return True
+
+    # Explicit machine-readable recipients are a strong send intent signal.
+    has_recipient = "user:" in lowered or "group:" in lowered
+    has_send_verb = any(verb in lowered for verb in ("发送", "发消息", "发链接", "send "))
+    return has_recipient and has_send_verb
 
 
 def _session_key(event: MessageEvent, runtime: Runtime) -> str:

@@ -183,6 +183,26 @@ async def test_summary_does_not_steal_github_agent_operation_with_url(monkeypatc
     ) is False
 
 
+async def test_summary_does_not_steal_other_agent_operations_with_urls(monkeypatch):
+    _patch_mode(monkeypatch, "mentioned")
+    cases = [
+        "记住 https://example.com 是我的博客",
+        "明天提醒我看 https://example.com",
+        "把 https://example.com 发送给 user:123456",
+        "把 https://example.com 群发给 group:30000",
+    ]
+    for offset, text in enumerate(cases, start=220):
+        event = _private_event(text, mid=offset)
+        assert await web_summary._trigger(event) is False
+        assert await chat_trigger(event) is True
+
+
+async def test_summary_still_handles_normal_url_summary_intent(monkeypatch):
+    _patch_mode(monkeypatch, "mentioned")
+    event = _private_event("帮我看看这篇文章 https://example.com/article", mid=224)
+    assert await web_summary._trigger(event) is True
+
+
 async def test_summary_group_url_requires_at(monkeypatch):
     """场景 5：@机器人 + URL 自动总结；未 @ 不自动。"""
     _patch_mode(monkeypatch, "mentioned")
