@@ -62,7 +62,7 @@
 - 私聊：`private:{你的QQ}`，独立会话。
 - 群聊：默认 `group:{群号}:{你的QQ}` —— 同一个群里每个人有自己独立的 AI 上下文，互不干扰。
 - `GROUP_SHARED_CONTEXT=true` 时整个群共用一个上下文（所有人共享对话历史）。
-- 上下文最多保留 `MAX_CONTEXT_MESSAGES` 条（默认 20），超出的旧消息自动裁剪。
+- 上下文最多保留 `MAX_CONTEXT_MESSAGES` 条（默认 20），并受 `MAX_CONTEXT_CHARS` 总字符预算（默认 16000）限制；超出的旧内容自动裁剪。
 - 默认群成员独立上下文时，`/clear` 只清空自己的会话，不影响别人；`GROUP_SHARED_CONTEXT=true` 时整个群共用同一会话，因此只有 Bot 管理员可以执行 `/clear`。
 - AI 回复超过约 4000 字符时自动截断并注明，避免超出 QQ 单条消息上限发送失败。
 
@@ -288,6 +288,7 @@ user:789012
 | `AGENT_TOOL_CALLING_ENABLED` | true | 是否启用自然语言工具操作 |
 | `AGENT_CONFIRM_TTL_SECONDS` | 300 | 自然语言写操作确认有效期（秒） |
 | `MAX_CONTEXT_MESSAGES` | 20 | 上下文最大条数 |
+| `MAX_CONTEXT_CHARS` | 16000 | 送入 LLM 的历史总字符预算；同时限制单条持久化会话消息大小 |
 | `GROUP_SHARED_CONTEXT` | false | 群共享上下文 |
 | `URL_AUTO_SUMMARY_MODE` | mentioned | off / mentioned / all |
 | `MAX_WEBPAGE_BYTES` | 4194304 | 单页最大字节数 |

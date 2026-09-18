@@ -163,3 +163,47 @@ async def test_append_turn_rolls_back_user_message_if_assistant_insert_fails(db)
         "SELECT session_key FROM sessions WHERE session_key = ?",
         (key,),
     ) is None
+
+
+async def test_single_message_is_capped_before_persistence(db):
+    sm = SessionManager(
+        db,
+        max_context_messages=10,
+        max_context_chars=20,
+    )
+    key = SessionManager.private_key("long-message")
+    content = "abcdefghij" * 5
+
+    await sm.append(key, "assistant", content)
+
+    row = await db.fetchone(
+        "SELECT content FROM messages WHERE session_key = ?",
+        (key,),
+    )
+    assert row is not None
+    stored = row["content"]
+    assert len(stored) == 20
+    assert "上下文已截断" in stored
+    assert stored.startswith(content[:4])
+    assert stored.endswith(content[-4:])
+
+
+async def test_context_respects_total_character_budget_from_newest_messages(db):
+    sm = SessionManager(
+        db,
+        max_context_messages=10,
+        max_context_chars=10,
+    )
+    key = SessionManager.private_key("char-budget")
+
+    await sm.append(key, "user", "AAAAAA")
+    await sm.append(key, "assistant", "123456")
+    await sm.append(key, "user", "CCCCCC")
+
+    context = await sm.get_context(key)
+
+    assert context == [
+        {"role": "assistant", "content": "3456"},
+        {"role": "user", "content": "CCCCCC"},
+    ]
+    assert sum(len(item["content"]) for item in context) == 10

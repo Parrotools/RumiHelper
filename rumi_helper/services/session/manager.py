@@ -13,11 +13,19 @@ from contextlib import asynccontextmanager
 
 from rumi_helper.database.db import Database
 
+_TRUNCATION_MARKER = "\n…[上下文已截断]…\n"
+
 
 class SessionManager:
-    def __init__(self, db: Database, max_context_messages: int = 20):
+    def __init__(
+        self,
+        db: Database,
+        max_context_messages: int = 20,
+        max_context_chars: int = 16000,
+    ):
         self._db = db
-        self._max = max(2, max_context_messages)
+        self._max = max(2, int(max_context_messages))
+        self._max_chars = max(1, int(max_context_chars))
         self._turn_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -40,14 +48,25 @@ class SessionManager:
         return f"group:{group_id}:{user_id}"
 
     async def get_context(self, session_key: str) -> list[dict]:
-        """返回按时间升序（旧→新）的最近 N 条 {role, content}。"""
+        """返回最近 N 条，并按总字符预算保留最新上下文。"""
         rows = await self._db.fetchall(
             "SELECT role, content FROM ("
             "  SELECT id, role, content FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
             ") ORDER BY id ASC",
             (session_key, self._max),
         )
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+        selected: list[dict] = []
+        remaining = self._max_chars
+        for row in reversed(rows):
+            if remaining <= 0:
+                break
+            content = str(row["content"])
+            if len(content) > remaining:
+                content = content[-remaining:]
+            selected.append({"role": row["role"], "content": content})
+            remaining -= len(content)
+        selected.reverse()
+        return selected
 
     async def append(self, session_key: str, role: str, content: str) -> None:
         """Append one message and trim history atomically."""
@@ -74,7 +93,10 @@ class SessionManager:
             try:
                 await self._db.conn.executemany(
                     "INSERT INTO messages (session_key, role, content) VALUES (?, ?, ?)",
-                    [(session_key, role, content) for role, content in messages],
+                    [
+                        (session_key, role, self._truncate_message(str(content)))
+                        for role, content in messages
+                    ],
                 )
                 await self._db.conn.execute(
                     "INSERT INTO sessions (session_key) VALUES (?) "
@@ -92,6 +114,16 @@ class SessionManager:
             except Exception:
                 await self._db.conn.rollback()
                 raise
+
+    def _truncate_message(self, content: str) -> str:
+        if len(content) <= self._max_chars:
+            return content
+        if len(_TRUNCATION_MARKER) >= self._max_chars:
+            return content[: self._max_chars]
+        remaining = self._max_chars - len(_TRUNCATION_MARKER)
+        head = remaining // 2
+        tail = remaining - head
+        return content[:head] + _TRUNCATION_MARKER + content[-tail:]
 
     async def clear(self, session_key: str) -> None:
         """Delete session metadata and messages atomically."""

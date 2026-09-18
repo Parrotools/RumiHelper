@@ -202,7 +202,11 @@ async def _init_runtime_unlocked() -> Runtime:
             github=github,
             health=HealthService(db, llm, github_client, scheduler, started_at, check_qq=True),
             report=report,
-            sessions=SessionManager(db, settings.max_context_messages),
+            sessions=SessionManager(
+                db,
+                settings.max_context_messages,
+                settings.max_context_chars,
+            ),
             llm=llm,
             dispatcher=dispatcher,
             permission=PermissionService(settings.admin_ids),
