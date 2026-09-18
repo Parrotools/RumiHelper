@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import time
 import urllib.request
@@ -114,8 +114,14 @@ def save(path: Path, data: dict) -> None:
 
 
 def systemctl(*args: str) -> str:
-    return subprocess.run(["systemctl", *args], check=True, capture_output=True,
-                          text=True, timeout=45).stdout.strip()
+    # Fixed argv, absolute executable, no shell; callers pass internal constant arguments only.
+    return subprocess.run(  # nosec B603
+        ["/usr/bin/systemctl", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    ).stdout.strip()
 
 
 def password_credentials() -> tuple[str, str]:
@@ -123,7 +129,7 @@ def password_credentials() -> tuple[str, str]:
     digest = os.environ.get("NAPCAT_QUICK_PASSWORD_MD5", "")
     password = os.environ.get("NAPCAT_QUICK_PASSWORD", "")
     if not digest and password:
-        digest = hashlib.md5(password.encode()).hexdigest()
+        digest = hashlib.md5(password.encode(), usedforsecurity=False).hexdigest()
     if not account.isdigit() or not re.fullmatch(r"[0-9a-fA-F]{32}", digest):
         return "", ""
     return account, digest

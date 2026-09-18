@@ -23,6 +23,7 @@ rumi-doctor = "app.doctor:main"
 
 [project.optional-dependencies]
 dev = [
+    "bandit>=1.9.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",

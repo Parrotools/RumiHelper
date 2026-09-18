@@ -46,7 +46,7 @@ def parse_snapshot_payload(
 class GitHubClient:
     def __init__(
         self,
-        token: str = "",
+        token: str | None = None,
         timeout: float = 15.0,
         transport: httpx.AsyncBaseTransport | None = None,
         api_base_url: str = "https://api.github.com",

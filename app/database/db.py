@@ -123,11 +123,13 @@ class Database(
             # executescript() is not implicitly atomic across the whole script.
             # Wrap each migration and its version marker in one explicit transaction
             # so partial schema/data changes never survive a failed migration.
-            script = (
-                "BEGIN IMMEDIATE;\n"
-                f"{sql.rstrip()}\n"
-                f"INSERT INTO schema_migrations (version) VALUES ({int(version)});\n"
-                "COMMIT;"
+            # MIGRATIONS is a source-controlled constant and version is
+            # coerced to int; no user input reaches this executescript.
+            version_marker = (
+                f"INSERT INTO schema_migrations (version) VALUES ({int(version)});"  # nosec B608
+            )
+            script = "\n".join(  # noqa: FLY002 - intentional for Bandit-friendly audited SQL
+                ("BEGIN IMMEDIATE;", sql.rstrip(), version_marker, "COMMIT;")
             )
             try:
                 await self.conn.executescript(script)
