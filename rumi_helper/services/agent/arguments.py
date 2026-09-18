@@ -15,7 +15,7 @@ from rumi_helper.services.memory import VALID_MEMORY_TYPES
 from rumi_helper.services.qq.broadcast_parser import BroadcastFormatError, parse_targets
 from rumi_helper.services.scheduler import SchedulerValidationError, parse_reminder_command
 from rumi_helper.services.web.url_parser import extract_urls
-from rumi_helper.utils import truncate_for_qq
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT, truncate_for_qq
 
 _GITHUB_REPO_SHORTHAND = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _MAX_AGENT_TEXT_CHARS = 2000
@@ -111,6 +111,10 @@ def normalize_arguments(
         message = str(arguments["message"]).strip()
         if not message:
             raise AgentArgumentError("消息内容不能为空")
+        if len(message) > QQ_TEXT_SAFE_LIMIT:
+            raise AgentArgumentError(
+                f"消息内容不能超过 {QQ_TEXT_SAFE_LIMIT} 个字符"
+            )
         targets = _normalize_targets(arguments, runtime)
         return {"targets": targets, "message": message}
     return None

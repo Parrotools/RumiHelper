@@ -4,6 +4,8 @@ from datetime import UTC, datetime, tzinfo
 
 from apscheduler.triggers.cron import CronTrigger
 
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
+
 
 class SchedulerValidationError(ValueError):
     """任务或提醒格式不合法。"""
@@ -23,6 +25,10 @@ def parse_reminder_command(
         raise SchedulerValidationError(
             "格式：/remind YYYY-MM-DD HH:MM -- 内容，或 "
             "/remind cron:0 8 * * * -- 内容"
+        )
+    if len(message) > QQ_TEXT_SAFE_LIMIT:
+        raise SchedulerValidationError(
+            f"内容不能超过 {QQ_TEXT_SAFE_LIMIT} 个字符"
         )
 
     if schedule.lower().startswith("cron:"):

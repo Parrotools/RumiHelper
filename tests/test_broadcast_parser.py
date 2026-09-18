@@ -42,3 +42,10 @@ def test_invalid_target_id():
 def test_empty_targets():
     with pytest.raises(BroadcastFormatError):
         parse_targets("  ")
+
+
+def test_rejects_oversized_message():
+    with pytest.raises(BroadcastFormatError, match="4000"):
+        parse_broadcast_command(
+            "/broadcast user:123 -- " + ("x" * 4001)
+        )

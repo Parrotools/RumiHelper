@@ -6,6 +6,8 @@
 
 from dataclasses import dataclass
 
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
+
 COMMAND_PREFIX = "/broadcast"
 SEPARATOR = "--"
 VALID_TARGET_TYPES = ("user", "group")
@@ -58,4 +60,8 @@ def parse_broadcast_command(text: str) -> tuple[list[BroadcastTarget], str]:
     message = message.strip()
     if not message:
         raise BroadcastFormatError("消息内容不能为空")
+    if len(message) > QQ_TEXT_SAFE_LIMIT:
+        raise BroadcastFormatError(
+            f"消息内容不能超过 {QQ_TEXT_SAFE_LIMIT} 个字符"
+        )
     return parse_targets(targets_raw), message

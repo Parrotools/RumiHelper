@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -821,3 +822,39 @@ async def test_agent_github_list_is_private_only(db):
     assert result is not None and result.handled
     assert result.message == "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
     assert "OpenAI/openai-python" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_oversized_broadcast_before_confirmation(db):
+    oversized = "x" * 4001
+    runtime = _runtime(
+        db,
+        FakeLLM(
+            json.dumps(
+                {
+                    "action": "broadcast_message",
+                    "arguments": {
+                        "targets": "user:123456",
+                        "message": oversized,
+                    },
+                },
+                ensure_ascii=False,
+            )
+        ),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=_event("admin"),
+        text="发一条超长广播",
+    )
+
+    assert result is not None and result.handled
+    assert "4000" in result.message
+    assert "确认执行" not in result.message
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM pending_agent_actions",
+        (),
+    ) == {"count": 0}
