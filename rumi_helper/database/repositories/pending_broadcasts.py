@@ -73,13 +73,27 @@ class PendingBroadcastRepository:
             return row
 
     async def claim_pending(self, pending_id: int) -> bool:
-        """Atomically claim an active broadcast for execution."""
-        async with self.operation(), self.conn.execute(
-            "UPDATE pending_broadcasts SET status = ? WHERE id = ? AND status = ?",
-            (_PENDING_EXECUTING, pending_id, _PENDING_ACTIVE),
-        ) as cursor:
+        """Atomically claim a still-live active broadcast for execution."""
+        now = _now()
+        async with self.operation():
+            async with self.conn.execute(
+                "UPDATE pending_broadcasts SET status = ? "
+                "WHERE id = ? AND status = ? AND expires_at > ?",
+                (_PENDING_EXECUTING, pending_id, _PENDING_ACTIVE, now),
+            ) as cursor:
+                claimed = cursor.rowcount > 0
+            if claimed:
+                await self.conn.commit()
+                return True
+
+            await self.conn.execute(
+                "UPDATE pending_broadcasts "
+                "SET status = ?, targets_json = '[]', content = '' "
+                "WHERE id = ? AND status = ? AND expires_at <= ?",
+                (_PENDING_EXPIRED, pending_id, _PENDING_ACTIVE, now),
+            )
             await self.conn.commit()
-            return cursor.rowcount > 0
+            return False
 
     async def recover_executing_broadcasts(self, now: str) -> int:
         """Fail only expired executions; fresh ones may still belong to another live process."""

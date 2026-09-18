@@ -36,6 +36,25 @@ async def test_ttl_expiry(db):
     assert rows[0]["status"] == "expired"
 
 
+async def test_claim_rechecks_ttl_and_redacts_expired_payload(db):
+    pid = await db.create_pending_broadcast(
+        "admin1",
+        [{"type": "user", "id": "123"}],
+        "secret broadcast",
+        ttl_seconds=-1,
+    )
+
+    assert await db.claim_pending(pid) is False
+    assert await db.fetchone(
+        "SELECT status, targets_json, content FROM pending_broadcasts WHERE id = ?",
+        (pid,),
+    ) == {
+        "status": "expired",
+        "targets_json": "[]",
+        "content": "",
+    }
+
+
 async def test_finish_prevents_double_execute(db):
     pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
     assert await db.claim_pending(pid) is True
