@@ -28,7 +28,9 @@ class PendingBroadcastRepository:
             )
             try:
                 await self.conn.execute(
-                    "UPDATE pending_broadcasts SET status = ? WHERE admin_id = ? AND status = ?",
+                    "UPDATE pending_broadcasts "
+                    "SET status = ?, targets_json = '[]', content = '' "
+                    "WHERE admin_id = ? AND status = ?",
                     (_PENDING_CANCELLED, admin_id, _PENDING_ACTIVE),
                 )
                 cursor = await self.conn.execute(
@@ -60,7 +62,9 @@ class PendingBroadcastRepository:
                 return None
             if row["expires_at"] <= _now():
                 await self.conn.execute(
-                    "UPDATE pending_broadcasts SET status = ? WHERE id = ? AND status = ?",
+                    "UPDATE pending_broadcasts "
+                    "SET status = ?, targets_json = '[]', content = '' "
+                    "WHERE id = ? AND status = ?",
                     (_PENDING_EXPIRED, row["id"], _PENDING_ACTIVE),
                 )
                 await self.conn.commit()
@@ -80,7 +84,8 @@ class PendingBroadcastRepository:
     async def recover_executing_broadcasts(self, now: str) -> int:
         """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_broadcasts SET status = ? "
+            "UPDATE pending_broadcasts "
+            "SET status = ?, targets_json = '[]', content = '' "
             "WHERE status = ? AND expires_at <= ?",
             (_PENDING_FAILED, _PENDING_EXECUTING, str(now)),
         ) as cursor:
@@ -98,7 +103,9 @@ class PendingBroadcastRepository:
         if previous is None:
             raise ValueError("无效的 pending broadcast 状态")
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_broadcasts SET status = ? WHERE id = ? AND status = ?",
+            "UPDATE pending_broadcasts "
+            "SET status = ?, targets_json = '[]', content = '' "
+            "WHERE id = ? AND status = ?",
             (status, pending_id, previous),
         ) as cursor:
             await self.conn.commit()

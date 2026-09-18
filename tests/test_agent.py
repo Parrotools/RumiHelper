@@ -192,6 +192,11 @@ async def test_mutating_tool_is_pending_until_confirmation(db):
     confirmed = await harness.confirm(runtime=runtime, event=_event())
     assert confirmed == "已添加仓库 OpenAI/openai-python。"
     assert github.added == [("user-1", "https://github.com/OpenAI/openai-python")]
+    terminal = await db.fetchone(
+        "SELECT status, arguments, summary FROM pending_agent_actions",
+        (),
+    )
+    assert terminal == {"status": "confirmed", "arguments": "{}", "summary": ""}
     assert await harness.confirm(runtime=runtime, event=_event()) == "没有待确认的操作（可能已过期、已执行或不存在）。"
 
 

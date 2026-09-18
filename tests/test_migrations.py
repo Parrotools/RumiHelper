@@ -6,7 +6,7 @@ import pytest
 
 import rumi_helper.database.db as db_module
 from rumi_helper.database.db import Database
-from rumi_helper.database.models import OUTBOUND_MESSAGES_SCHEMA, SCHEMA
+from rumi_helper.database.models import AGENT_ACTION_SCHEMA, OUTBOUND_MESSAGES_SCHEMA, SCHEMA
 
 
 async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     finally:
         await upgraded.close()
 
@@ -192,7 +192,7 @@ async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_pat
 
     await asyncio.gather(first.connect(), second.connect())
     try:
-        expected = list(range(1, 10))
+        expected = list(range(1, 11))
         assert await first.migration_versions() == expected
         assert await second.migration_versions() == expected
         assert await first.fetchone(
@@ -249,6 +249,71 @@ async def test_delivery_content_redaction_migration_clears_historical_terminal_b
             {"status": "sent", "content": ""},
             {"status": "failed", "content": ""},
             {"status": "retry", "content": "still needed"},
+        ]
+    finally:
+        await database.close()
+
+
+async def test_terminal_confirmation_redaction_migration_keeps_only_live_payloads(tmp_path):
+    path = str(tmp_path / "confirmation-redaction.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.executescript(AGENT_ACTION_SCHEMA)
+        await legacy.execute(
+            "INSERT INTO pending_agent_actions "
+            "(user_id, session_key, tool_name, arguments, summary, status, expires_at) "
+            "VALUES ('u1', 'private:u1', 'memory_save', '{\"content\":\"secret\"}', "
+            "'secret summary', 'confirmed', '9999-01-01T00:00:00+00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO pending_agent_actions "
+            "(user_id, session_key, tool_name, arguments, summary, status, expires_at) "
+            "VALUES ('u2', 'private:u2', 'memory_save', '{\"content\":\"needed\"}', "
+            "'needed summary', 'pending', '9999-01-01T00:00:00+00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO pending_broadcasts "
+            "(admin_id, targets_json, content, status, expires_at) "
+            "VALUES ('a1', '[{\"type\":\"user\",\"id\":\"123\"}]', "
+            "'secret broadcast', 'failed', '9999-01-01 00:00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO pending_broadcasts "
+            "(admin_id, targets_json, content, status, expires_at) "
+            "VALUES ('a2', '[{\"type\":\"user\",\"id\":\"456\"}]', "
+            "'needed broadcast', 'active', '9999-01-01 00:00:00')"
+        )
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    database = Database(path)
+    await database.connect()
+    try:
+        actions = await database.fetchall(
+            "SELECT status, arguments, summary FROM pending_agent_actions ORDER BY id",
+            (),
+        )
+        assert actions == [
+            {"status": "confirmed", "arguments": "{}", "summary": ""},
+            {
+                "status": "pending",
+                "arguments": '{"content":"needed"}',
+                "summary": "needed summary",
+            },
+        ]
+        broadcasts = await database.fetchall(
+            "SELECT status, targets_json, content FROM pending_broadcasts ORDER BY id",
+            (),
+        )
+        assert broadcasts == [
+            {"status": "failed", "targets_json": "[]", "content": ""},
+            {
+                "status": "active",
+                "targets_json": '[{"type":"user","id":"456"}]',
+                "content": "needed broadcast",
+            },
         ]
     finally:
         await database.close()

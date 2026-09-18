@@ -199,6 +199,15 @@ SET content = ''
 WHERE status IN ('sent', 'failed') AND content <> '';
 """
 
+TERMINAL_CONFIRMATION_REDACTION_SCHEMA = """
+UPDATE pending_agent_actions
+SET arguments = '{}', summary = ''
+WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed');
+UPDATE pending_broadcasts
+SET targets_json = '[]', content = ''
+WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed');
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,4 +235,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (7, OUTBOUND_CONTROL_SCHEMA),
     (8, SYSTEM_TASK_UNIQUENESS_SCHEMA),
     (9, DELIVERY_CONTENT_REDACTION_SCHEMA),
+    (10, TERMINAL_CONFIRMATION_REDACTION_SCHEMA),
 )

@@ -14,7 +14,8 @@ class AgentActionRepository:
         async with self.operation():
             try:
                 await self.conn.execute(
-                    "UPDATE pending_agent_actions SET status = 'cancelled' "
+                    "UPDATE pending_agent_actions "
+                    "SET status = 'cancelled', arguments = '{}', summary = '' "
                     "WHERE user_id = ? AND session_key = ? AND status = 'pending'",
                     (str(user_id), str(session_key)),
                 )
@@ -57,7 +58,8 @@ class AgentActionRepository:
         now: str,
     ) -> dict | None:
         await self.conn.execute(
-            "UPDATE pending_agent_actions SET status = 'expired' "
+            "UPDATE pending_agent_actions "
+            "SET status = 'expired', arguments = '{}', summary = '' "
             "WHERE user_id = ? AND session_key = ? AND status = 'pending' AND expires_at <= ?",
             (str(user_id), str(session_key), now),
         )
@@ -97,7 +99,8 @@ class AgentActionRepository:
     async def recover_executing_agent_actions(self, now: str) -> int:
         """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_agent_actions SET status = 'failed' "
+            "UPDATE pending_agent_actions "
+            "SET status = 'failed', arguments = '{}', summary = '' "
             "WHERE status = 'executing' AND expires_at <= ?",
             (str(now),),
         ) as cursor:
@@ -115,7 +118,9 @@ class AgentActionRepository:
         if previous_status is None:
             raise ValueError("无效的 agent action 状态")
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_agent_actions SET status = ? WHERE id = ? AND status = ?",
+            "UPDATE pending_agent_actions "
+            "SET status = ?, arguments = '{}', summary = '' "
+            "WHERE id = ? AND status = ?",
             (status, int(action_id), previous_status),
         ) as cursor:
             await self.conn.commit()

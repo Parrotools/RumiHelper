@@ -95,6 +95,10 @@ async def test_concurrent_replacement_leaves_only_one_active(db):
     )
     assert [row["status"] for row in rows].count("active") == 1
     assert [row["status"] for row in rows].count("cancelled") == 1
+    cancelled = next(row for row in rows if row["status"] == "cancelled")
+    active = next(row for row in rows if row["status"] == "active")
+    assert cancelled["content"] == ""
+    assert active["content"] in {"first", "second"}
 
 
 async def test_recover_executing_broadcasts_only_fails_expired_executions(db):
