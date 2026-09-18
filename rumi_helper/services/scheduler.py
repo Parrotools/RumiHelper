@@ -368,13 +368,14 @@ class SchedulerService:
         if not content:
             raise SchedulerValidationError("未能生成与历史不同的段子")
 
-        await self._db.record_scheduled_content_and_enqueue_group(
+        queued = await self._db.record_scheduled_content_and_enqueue_group(
             task["id"],
             target_id,
             content,
             self._outbound_max_attempts,
         )
-        self._dispatcher.notify_queue_changed()
+        if queued:
+            self._dispatcher.notify_queue_changed()
 
     @staticmethod
     def _job_id(task_id: int) -> str:

@@ -72,11 +72,12 @@ class SchedulerRepository:
         self,
         task_id: int,
         content: str,
-    ) -> None:
-        await self.conn.execute(
+    ) -> bool:
+        async with self.conn.execute(
             "INSERT OR IGNORE INTO scheduled_content_history (task_id, content) VALUES (?, ?)",
             (task_id, content),
-        )
+        ) as cursor:
+            created = cursor.rowcount == 1
         await self.conn.execute(
             "DELETE FROM scheduled_content_history WHERE task_id = ? AND id NOT IN ("
             "  SELECT id FROM scheduled_content_history WHERE task_id = ? "
@@ -84,6 +85,7 @@ class SchedulerRepository:
             ")",
             (task_id, task_id),
         )
+        return created
 
     async def record_scheduled_content_and_enqueue_group(
         self,
@@ -91,11 +93,17 @@ class SchedulerRepository:
         group_id: str,
         content: str,
         max_attempts: int,
-    ) -> None:
-        """Atomically record generated content and queue its group delivery."""
+    ) -> bool:
+        """Atomically queue generated content only for the unique history winner."""
         async with self.operation():
             try:
-                await self._insert_scheduled_content_history_unlocked(task_id, content)
+                created = await self._insert_scheduled_content_history_unlocked(
+                    task_id,
+                    content,
+                )
+                if not created:
+                    await self.conn.commit()
+                    return False
                 await self.conn.execute(
                     "INSERT INTO outbound_messages "
                     "(target_type, target_id, content, max_attempts, next_attempt_at) "
@@ -108,6 +116,7 @@ class SchedulerRepository:
                     ),
                 )
                 await self.conn.commit()
+                return True
             except Exception:
                 await self.conn.rollback()
                 raise

@@ -232,6 +232,38 @@ async def test_topic_joke_history_and_outbox_roll_back_together(db):
     assert dispatcher.wake_calls == 1
 
 
+async def test_topic_joke_duplicate_history_cannot_queue_twice(db):
+    task_id = await db.create_scheduled_task(
+        "admin-1",
+        "topic_joke",
+        {"target_type": "group", "target_id": "30000", "topic": "mobile"},
+        "0 12 * * *",
+        "2030-01-01T12:00:00+00:00",
+    )
+
+    assert await db.record_scheduled_content_and_enqueue_group(
+        task_id,
+        "30000",
+        "同一个段子",
+        3,
+    ) is True
+    assert await db.record_scheduled_content_and_enqueue_group(
+        task_id,
+        "30000",
+        "同一个段子",
+        3,
+    ) is False
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM scheduled_content_history WHERE task_id = ?",
+        (task_id,),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 1}
+
+
 async def test_reminder_does_not_send_when_notifications_are_off(db):
     dispatcher = FakeDispatcher()
     scheduler = SchedulerService(db, dispatcher, timezone_name="UTC")
