@@ -24,8 +24,11 @@ async def test_outbound_queue_delivers_a_scheduled_message(db):
     message_id = await dispatcher.enqueue_user("123", "提醒内容")
 
     assert await dispatcher.process_outbound_messages() == 1
-    row = await db.fetchone("SELECT status, attempts, message_id FROM outbound_messages WHERE id = ?", (message_id,))
-    assert row == {"status": "sent", "attempts": 1, "message_id": "9"}
+    row = await db.fetchone(
+        "SELECT status, attempts, message_id, content FROM outbound_messages WHERE id = ?",
+        (message_id,),
+    )
+    assert row == {"status": "sent", "attempts": 1, "message_id": "9", "content": ""}
 
 
 async def test_outbound_queue_retries_a_failed_message(db):
@@ -63,10 +66,16 @@ async def test_outbound_queue_marks_message_failed_after_max_attempts(db):
     await dispatcher.process_outbound_messages()
     await dispatcher.process_outbound_messages()
 
-    assert (await db.fetchone("SELECT status, attempts, last_error FROM outbound_messages WHERE id = ?", (message_id,))) == {
+    assert (
+        await db.fetchone(
+            "SELECT status, attempts, last_error, content FROM outbound_messages WHERE id = ?",
+            (message_id,),
+        )
+    ) == {
         "status": "failed",
         "attempts": 2,
         "last_error": "RuntimeError: permanent failure",
+        "content": "",
     }
 
 

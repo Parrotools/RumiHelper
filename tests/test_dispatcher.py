@@ -35,6 +35,7 @@ async def test_send_user_success_logs(db):
     assert len(logs) == 1
     assert logs[0]["success"] == 1
     assert logs[0]["target_type"] == "user"
+    assert logs[0]["content"] == ""
 
 
 async def test_send_failure_recorded(db):

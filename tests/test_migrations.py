@@ -6,7 +6,7 @@ import pytest
 
 import rumi_helper.database.db as db_module
 from rumi_helper.database.db import Database
-from rumi_helper.database.models import SCHEMA
+from rumi_helper.database.models import OUTBOUND_MESSAGES_SCHEMA, SCHEMA
 
 
 async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     finally:
         await upgraded.close()
 
@@ -192,7 +192,7 @@ async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_pat
 
     await asyncio.gather(first.connect(), second.connect())
     try:
-        expected = list(range(1, 9))
+        expected = list(range(1, 10))
         assert await first.migration_versions() == expected
         assert await second.migration_versions() == expected
         assert await first.fetchone(
@@ -202,3 +202,53 @@ async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_pat
     finally:
         await first.close()
         await second.close()
+
+
+async def test_delivery_content_redaction_migration_clears_historical_terminal_bodies(tmp_path):
+    path = str(tmp_path / "delivery-redaction.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.executescript(OUTBOUND_MESSAGES_SCHEMA)
+        await legacy.execute(
+            "INSERT INTO send_logs "
+            "(target_type, target_id, content, success, message_id) "
+            "VALUES ('user', '123', 'secret audit body', 1, 'm1')"
+        )
+        await legacy.execute(
+            "INSERT INTO outbound_messages "
+            "(target_type, target_id, content, status, max_attempts, next_attempt_at) "
+            "VALUES ('user', '123', 'sent secret', 'sent', 3, '2000-01-01 00:00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO outbound_messages "
+            "(target_type, target_id, content, status, max_attempts, next_attempt_at) "
+            "VALUES ('user', '456', 'failed secret', 'failed', 3, '2000-01-01 00:00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO outbound_messages "
+            "(target_type, target_id, content, status, max_attempts, next_attempt_at) "
+            "VALUES ('user', '789', 'still needed', 'retry', 3, '2000-01-01 00:00:00')"
+        )
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    database = Database(path)
+    await database.connect()
+    try:
+        assert await database.fetchall(
+            "SELECT content FROM send_logs",
+            (),
+        ) == [{"content": ""}]
+        rows = await database.fetchall(
+            "SELECT status, content FROM outbound_messages ORDER BY id",
+            (),
+        )
+        assert rows == [
+            {"status": "sent", "content": ""},
+            {"status": "failed", "content": ""},
+            {"status": "retry", "content": "still needed"},
+        ]
+    finally:
+        await database.close()

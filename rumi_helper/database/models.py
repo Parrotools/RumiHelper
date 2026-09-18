@@ -192,6 +192,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_system_active_unique
     WHERE owner_id = '__system__' AND enabled = 1;
 """
 
+DELIVERY_CONTENT_REDACTION_SCHEMA = """
+UPDATE send_logs SET content = '' WHERE content <> '';
+UPDATE outbound_messages
+SET content = ''
+WHERE status IN ('sent', 'failed') AND content <> '';
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,4 +225,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (6, GROUP_FEEDBACK_SCHEMA),
     (7, OUTBOUND_CONTROL_SCHEMA),
     (8, SYSTEM_TASK_UNIQUENESS_SCHEMA),
+    (9, DELIVERY_CONTENT_REDACTION_SCHEMA),
 )

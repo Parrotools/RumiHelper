@@ -257,7 +257,7 @@ user:789012
 - 目标数量超过 `MAX_BROADCAST_RECIPIENTS`（默认 20）直接拒绝。
 - 发送限速 `SEND_RATE_LIMIT_PER_SECOND`（默认 1 条/秒），不会瞬间轰炸。
 - 单个目标失败不影响其他目标，最后统一汇报成功/失败明细。
-- 每次发送（无论成败）都记录在 `send_logs` 表：目标、时间、结果、message_id、错误信息。
+- 每次发送（无论成败）都记录在 `send_logs` 表：目标、时间、结果、message_id、错误信息；出于隐私考虑不保留消息正文。
 - `BROADCAST_REQUIRE_CONFIRM=false` 可关闭预览确认（不推荐）。
 
 ## 5. 管理员：其他命令

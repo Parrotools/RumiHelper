@@ -102,7 +102,7 @@ class OutboundRepository:
     async def mark_outbound_message_sent(self, message_id: int, sent_at: str, qq_message_id: str | None) -> None:
         await self.execute(
             "UPDATE outbound_messages SET status = 'sent', sent_at = ?, message_id = ?, locked_at = NULL, "
-            "last_error = NULL WHERE id = ?",
+            "last_error = NULL, content = '' WHERE id = ?",
             (sent_at, qq_message_id, message_id),
         )
 
@@ -111,7 +111,8 @@ class OutboundRepository:
     ) -> None:
         if attempts >= max_attempts:
             await self.execute(
-                "UPDATE outbound_messages SET status = 'failed', locked_at = NULL, last_error = ? WHERE id = ?",
+                "UPDATE outbound_messages SET status = 'failed', locked_at = NULL, last_error = ?, "
+                "content = '' WHERE id = ?",
                 (error[:500], message_id),
             )
             return
@@ -139,8 +140,9 @@ class OutboundRepository:
         message_id: str | None,
         error: str | None,
     ) -> None:
+        del content
         await self.execute(
             "INSERT INTO send_logs (target_type, target_id, content, success, message_id, error) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (target_type, target_id, content[:500], int(success), message_id, error[:500] if error else None),
+            "VALUES (?, ?, '', ?, ?, ?)",
+            (target_type, target_id, int(success), message_id, error[:500] if error else None),
         )
