@@ -584,3 +584,93 @@ async def test_start_refreshes_persisted_next_run_for_cron_task(db):
         assert next_run > before
     finally:
         await scheduler.stop()
+
+
+async def test_concurrent_processes_claim_same_scheduled_occurrence_once(tmp_path):
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierDatabase(Database):
+        async def fetch_scheduled_task(self, task_id: int):
+            nonlocal barrier_count
+            row = await super().fetch_scheduled_task(task_id)
+            if row is not None:
+                barrier_count += 1
+                if barrier_count >= 2:
+                    barrier_ready.set()
+                await barrier_ready.wait()
+            return row
+
+    path = str(tmp_path / "scheduler-race.db")
+    first_db = BarrierDatabase(path)
+    second_db = BarrierDatabase(path)
+    await first_db.connect()
+    await second_db.connect()
+    calls: list[str] = []
+
+    try:
+        due = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        task_id = await first_db.create_scheduled_task(
+            "owner",
+            "probe",
+            {},
+            "0 * * * *",
+            due,
+        )
+
+        async def first_handler(_task: dict) -> None:
+            calls.append("first")
+
+        async def second_handler(_task: dict) -> None:
+            calls.append("second")
+
+        first = SchedulerService(first_db, FakeDispatcher(), timezone_name="UTC")
+        second = SchedulerService(second_db, FakeDispatcher(), timezone_name="UTC")
+        first.register_handler("probe", first_handler)
+        second.register_handler("probe", second_handler)
+
+        await asyncio.gather(
+            first.run_task(task_id, force=False),
+            second.run_task(task_id, force=False),
+        )
+
+        assert len(calls) == 1
+        task = await first_db.fetch_scheduled_task(task_id)
+        assert task["enabled"] == 1
+        assert task["last_run"] is not None
+        assert datetime.fromisoformat(task["next_run"]) > datetime.now(UTC)
+    finally:
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_stale_trigger_cannot_execute_future_database_occurrence(db):
+    calls: list[str] = []
+
+    async def handler(_task: dict) -> None:
+        calls.append("ran")
+
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    scheduler.register_handler("probe", handler)
+    future = datetime.now(UTC) + timedelta(hours=1)
+    task_id = await db.create_scheduled_task(
+        "owner",
+        "probe",
+        {},
+        "0 * * * *",
+        future.isoformat(),
+    )
+
+    await scheduler.run_task(task_id, force=False)
+
+    assert calls == []
+    untouched = await db.fetch_scheduled_task(task_id)
+    assert untouched["last_run"] is None
+    assert untouched["next_run"] == future.isoformat()
+
+    await scheduler.run_task(task_id, force=True)
+
+    assert calls == ["ran"]
+    claimed = await db.fetch_scheduled_task(task_id)
+    assert claimed["last_run"] is not None
+    assert claimed["next_run"] != future.isoformat()

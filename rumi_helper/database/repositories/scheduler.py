@@ -35,6 +35,32 @@ class SchedulerRepository:
             (owner_id, task_type),
         )
 
+    async def claim_scheduled_task_run(
+        self,
+        task_id: int,
+        expected_next_run: str,
+        expected_cron_expression: str | None,
+        claimed_at: str,
+        next_run: str | None,
+        enabled: bool,
+    ) -> bool:
+        """Atomically claim one scheduled occurrence across Bot processes."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE scheduled_tasks "
+            "SET last_run = ?, next_run = ?, enabled = ? "
+            "WHERE id = ? AND enabled = 1 AND next_run = ? AND cron_expression IS ?",
+            (
+                claimed_at,
+                next_run,
+                int(enabled),
+                int(task_id),
+                expected_next_run,
+                expected_cron_expression,
+            ),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
+
     async def mark_scheduled_task_run(
         self, task_id: int, last_run: str, next_run: str | None, enabled: bool
     ) -> None:

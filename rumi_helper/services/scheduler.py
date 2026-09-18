@@ -264,13 +264,37 @@ class SchedulerService:
                 self._schedule(task)
         return task_id
 
-    async def run_task(self, task_id: int) -> None:
+    async def run_task(self, task_id: int, *, force: bool = True) -> None:
         current = asyncio.current_task()
         if current is not None:
             self._active_runs.add(current)
         try:
             task = await self._db.fetch_scheduled_task(task_id)
-            if task is None or not task["enabled"]:
+            if task is None or not task["enabled"] or not task["next_run"]:
+                return
+
+            scheduled_for = self._parse_datetime(task["next_run"])
+            now = datetime.now(self._timezone)
+            if not force and scheduled_for > now:
+                # A stale in-memory trigger can survive a schedule change in
+                # another process. Never use it to execute a future DB occurrence.
+                return
+
+            cron_expression = task["cron_expression"]
+            next_run = (
+                self._next_cron_run(cron_expression).isoformat()
+                if cron_expression
+                else None
+            )
+            claimed = await self._db.claim_scheduled_task_run(
+                task_id,
+                str(task["next_run"]),
+                cron_expression,
+                datetime.now(UTC).isoformat(),
+                next_run,
+                bool(cron_expression),
+            )
+            if not claimed:
                 return
 
             try:
@@ -289,21 +313,6 @@ class SchedulerService:
                     )
             except Exception:
                 logger.exception("定时任务执行失败 task_id=%s type=%s", task_id, task["task_type"])
-            finally:
-                # A task may be disabled or have its cron changed while its handler
-                # is still running. Re-read the row so this stale execution cannot
-                # overwrite a newer configuration in its completion bookkeeping.
-                latest = await self._db.fetch_scheduled_task(task_id)
-                if latest is not None:
-                    cron_expression = latest["cron_expression"] if latest["enabled"] else None
-                    next_run = self._next_cron_run(cron_expression) if cron_expression else None
-                    enabled = bool(cron_expression)
-                    await self._db.mark_scheduled_task_run(
-                        task_id,
-                        datetime.now(UTC).isoformat(),
-                        next_run.isoformat() if next_run else None,
-                        enabled,
-                    )
         finally:
             if current is not None:
                 self._active_runs.discard(current)
@@ -405,6 +414,7 @@ class SchedulerService:
             self.run_task,
             trigger=trigger,
             args=[task["id"]],
+            kwargs={"force": False},
             id=self._job_id(task["id"]),
             replace_existing=True,
             coalesce=True,
