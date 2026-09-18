@@ -41,6 +41,8 @@ def parse_repo_url(url: str) -> GitHubRepoRef:
     return GitHubRepoRef(owner, name, f"https://github.com/{owner}/{name}")
 
 
+_PREVIOUS_UNSET = object()
+
 _SNAPSHOT_STATE_FIELDS = (
     "stars",
     "forks",
@@ -149,9 +151,14 @@ class GitHubTracker:
         if self._dispatcher is None:
             raise GitHubTrackerError("GitHub 通知未配置消息发送器")
 
+        repos = await self._db.fetch_github_repositories()
+        previous_by_id = {
+            int(repo["id"]): await self._db.fetch_latest_github_snapshot(int(repo["id"]))
+            for repo in repos
+        }
         snapshots: dict[tuple[str, str], GitHubSnapshot] = {}
         failed_repositories: set[tuple[str, str]] = set()
-        for repo in await self._db.fetch_github_repositories():
+        for repo in repos:
             repository_key = (
                 str(repo["repo_owner"]).lower(),
                 str(repo["repo_name"]).lower(),
@@ -183,6 +190,7 @@ class GitHubTracker:
                     repo,
                     queue_notifications=True,
                     snapshot=snapshot,
+                    previous=previous_by_id[int(repo["id"])],
                 )
             except Exception:
                 logger.exception("GitHub 检查失败 repo_id=%s", repo["id"])
@@ -245,10 +253,13 @@ class GitHubTracker:
         *,
         queue_notifications: bool = False,
         snapshot: GitHubSnapshot | None = None,
+        previous: dict | None | object = _PREVIOUS_UNSET,
     ) -> dict:
         repo_id = int(repo["id"])
         lock = self._repo_check_locks.setdefault(repo_id, asyncio.Lock())
         async with lock:
+            if previous is _PREVIOUS_UNSET:
+                previous = await self._db.fetch_latest_github_snapshot(repo_id)
             if snapshot is None:
                 snapshot = await self._client.fetch_snapshot(
                     GitHubRepoRef(
@@ -257,7 +268,8 @@ class GitHubTracker:
                         repo["repo_url"],
                     )
                 )
-            previous = await self._db.fetch_latest_github_snapshot(repo_id)
+            if previous is not None and not isinstance(previous, dict):
+                raise GitHubTrackerError("GitHub snapshot 基线状态无效")
             changes = compare_snapshots(previous, snapshot)
             result = {"repo": repo, "snapshot": snapshot, "changes": changes}
             should_persist = not _same_snapshot_state(previous, snapshot)
@@ -276,12 +288,12 @@ class GitHubTracker:
                         for target in await self._db.fetch_github_notifications(repo_id)
                     ]
 
-            if should_persist and queue_notifications:
+            if should_persist:
                 expected_previous_id = int(previous["id"]) if previous is not None else 0
                 snapshot_id = await self._db.insert_github_snapshot_and_outbound(
                     repo_id,
                     snapshot.to_dict(),
-                    deliveries,
+                    deliveries if queue_notifications else [],
                     self._outbound_max_attempts,
                     expected_previous_id,
                 )
@@ -291,8 +303,6 @@ class GitHubTracker:
                     and self._dispatcher is not None
                 ):
                     self._dispatcher.notify_queue_changed()
-            elif should_persist:
-                await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
             return result
 
     async def watch(self, owner_id: str, url: str, target: str) -> None:

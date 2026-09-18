@@ -156,7 +156,8 @@ class GitHubRepository:
                     "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? "
                     "WHERE COALESCE(("
                     "  SELECT MAX(id) FROM github_snapshots WHERE repo_id = ?"
-                    "), 0) = ?",
+                    "), 0) = ? "
+                    "AND EXISTS (SELECT 1 FROM github_repositories WHERE id = ?)",
                     (
                         repo_id,
                         snapshot["stars"],
@@ -171,6 +172,7 @@ class GitHubRepository:
                         snapshot["open_issues_count"],
                         repo_id,
                         int(expected_previous_id),
+                        repo_id,
                     ),
                 ) as cursor:
                     if cursor.rowcount != 1:

@@ -794,3 +794,85 @@ def test_github_change_formatter_bounds_oversized_commit_message():
 
     assert len(rendered) <= QQ_TEXT_SAFE_LIMIT
     assert "内容过长已截断" in rendered
+
+
+async def test_stale_fetch_cannot_overwrite_newer_snapshot(db):
+    repo_url = "https://github.com/OpenAI/openai-python"
+    seed = GitHubTracker(db, FakeGitHubClient(_snapshot("base", stars=1)))
+    repo = await seed.add_repository("user-1", repo_url)
+    await seed.check("user-1", repo_url)
+
+    fetch_started = asyncio.Event()
+    release_old = asyncio.Event()
+
+    class BlockingClient:
+        async def fetch_snapshot(self, ref):
+            del ref
+            fetch_started.set()
+            await release_old.wait()
+            return _snapshot("old", stars=2)
+
+    stale_tracker = GitHubTracker(db, BlockingClient())
+    fresh_tracker = GitHubTracker(
+        db,
+        FakeGitHubClient(_snapshot("new", stars=3)),
+    )
+
+    stale_task = asyncio.create_task(
+        stale_tracker.check("user-1", repo_url)
+    )
+    await fetch_started.wait()
+
+    await fresh_tracker.check("user-1", repo_url)
+    release_old.set()
+    await stale_task
+
+    latest = await db.fetch_latest_github_snapshot(repo["id"])
+    assert latest is not None
+    assert latest["latest_commit_sha"] == "new"
+    assert latest["stars"] == 3
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_snapshots WHERE repo_id = ?",
+        (repo["id"],),
+    ) == {"count": 2}
+
+
+async def test_check_does_not_recreate_snapshot_after_repository_is_deleted(db):
+    repo_url = "https://github.com/OpenAI/openai-python"
+    seed = GitHubTracker(db, FakeGitHubClient(_snapshot("base")))
+    repo = await seed.add_repository("user-1", repo_url)
+    await seed.check("user-1", repo_url)
+
+    fetch_started = asyncio.Event()
+    release_fetch = asyncio.Event()
+
+    class BlockingClient:
+        async def fetch_snapshot(self, ref):
+            del ref
+            fetch_started.set()
+            await release_fetch.wait()
+            return _snapshot("later", stars=2)
+
+    checking = GitHubTracker(db, BlockingClient())
+    check_task = asyncio.create_task(
+        checking.check("user-1", repo_url)
+    )
+    await fetch_started.wait()
+
+    assert await seed.remove_repository("user-1", repo_url) is True
+    release_fetch.set()
+    await check_task
+
+    assert await db.fetch_github_repository(
+        "user-1",
+        "OpenAI",
+        "openai-python",
+    ) is None
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_snapshots WHERE repo_id = ?",
+        (repo["id"],),
+    ) == {"count": 0}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
