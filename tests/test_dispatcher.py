@@ -72,6 +72,39 @@ async def test_broadcast_empty_targets(db):
     d = MessageDispatcher(db, rate_limit_per_second=0, api_caller=_fake_caller(set()))
     report = await d.broadcast([], "msg")
     assert report.success_count == 0 and report.failed_count == 0
+    assert report.skipped_count == 0
+
+
+async def test_broadcast_reports_unattempted_targets_after_rate_limit_pause(db):
+    calls: list[str] = []
+
+    async def caller(action: str, **params) -> dict:
+        target_id = str(params.get("user_id") or params.get("group_id"))
+        calls.append(target_id)
+        raise RuntimeError("429 rate limit")
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+        rate_limit_pause_seconds=60,
+    )
+    targets = [
+        BroadcastTarget("user", "123"),
+        BroadcastTarget("group", "456"),
+        BroadcastTarget("user", "789"),
+    ]
+
+    report = await dispatcher.broadcast(targets, "msg")
+
+    assert calls == ["123"]
+    assert report.success_count == 0
+    assert report.failed_count == 1
+    assert report.skipped_count == 2
+    assert report.skipped_lines() == ["group:456", "user:789"]
+    assert report.summary_text().startswith("发送已停止")
+    assert "未发送：2" in report.summary_text()
+    assert len(await db.fetchall("SELECT * FROM send_logs")) == 1
 
 
 async def test_direct_send_respects_persisted_cooldown_after_restart(db):

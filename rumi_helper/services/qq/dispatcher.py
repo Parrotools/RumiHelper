@@ -34,6 +34,7 @@ class SendResult:
 @dataclass
 class BroadcastReport:
     results: list[SendResult] = field(default_factory=list)
+    skipped_targets: list[BroadcastTarget] = field(default_factory=list)
 
     @property
     def success_count(self) -> int:
@@ -43,15 +44,30 @@ class BroadcastReport:
     def failed_count(self) -> int:
         return sum(1 for r in self.results if not r.success)
 
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped_targets)
+
     def failed_lines(self) -> list[str]:
         return [f"{r.target_type}:{r.target_id}" for r in self.results if not r.success]
 
+    def skipped_lines(self) -> list[str]:
+        return [f"{target.type}:{target.id}" for target in self.skipped_targets]
+
     def summary_text(self) -> str:
-        lines = ["发送完成", f"成功：{self.success_count}", f"失败：{self.failed_count}"]
+        lines = [
+            "发送已停止" if self.skipped_targets else "发送完成",
+            f"成功：{self.success_count}",
+            f"失败：{self.failed_count}",
+        ]
         failed = self.failed_lines()
         if failed:
             lines.append("失败目标：")
             lines.extend(failed)
+        skipped = self.skipped_lines()
+        if skipped:
+            lines.append(f"未发送：{self.skipped_count}")
+            lines.extend(skipped)
         return "\n".join(lines)
 
 
@@ -259,7 +275,11 @@ class MessageDispatcher:
                 await asyncio.sleep(self._interval)  # 限速，禁止瞬时并发轰炸
             report.results.append(await self._send(t.type, t.id, message))
             if await self._remaining_pause_seconds() > 0:
-                logger.warning("主动群发因账号/API异常暂停，已停止继续发送")
+                report.skipped_targets.extend(targets[i + 1 :])
+                logger.warning(
+                    "主动群发因账号/API异常暂停，已停止继续发送 skipped=%s",
+                    report.skipped_count,
+                )
                 break
         return report
 
