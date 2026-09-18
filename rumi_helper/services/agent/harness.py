@@ -193,6 +193,14 @@ class AgentHarness:
                 exc,
             )
             return f"执行失败：{exc}"
+        except Exception:
+            await runtime.db.finish_pending_agent_action(pending["id"], "failed")
+            logger.exception(
+                "agent action unexpected failure id=%s tool=%s",
+                pending["id"],
+                tool.name,
+            )
+            return "执行失败：内部错误，请稍后重试。"
         await runtime.db.finish_pending_agent_action(pending["id"], "confirmed")
         logger.info(
             "agent action confirmed id=%s user=%s tool=%s",

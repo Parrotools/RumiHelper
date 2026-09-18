@@ -56,6 +56,12 @@ class FakeMemory:
         return []
 
 
+class CrashingMemory(FakeMemory):
+    async def save(self, user_id: str, memory_type: str, content: str) -> int:
+        del user_id, memory_type, content
+        raise RuntimeError("database path /secret/internal.db failed")
+
+
 class FakeNotifications:
     def __init__(self, reminder_notify: bool = False):
         self.values = {
@@ -198,6 +204,38 @@ async def test_mutating_tool_is_pending_until_confirmation(db):
     )
     assert terminal == {"status": "confirmed", "arguments": "{}", "summary": ""}
     assert await harness.confirm(runtime=runtime, event=_event()) == "没有待确认的操作（可能已过期、已执行或不存在）。"
+
+
+
+
+@pytest.mark.asyncio
+async def test_confirm_unexpected_handler_error_marks_failed_and_hides_internal_detail(db):
+    runtime = _runtime(
+        db,
+        FakeLLM(
+            '{"action":"memory_save","arguments":'
+            '{"memory_type":"fact","content":"remember this"}}'
+        ),
+        FakeGitHub(),
+    )
+    runtime.memory = CrashingMemory()
+    harness = AgentHarness()
+
+    pending = await harness.try_handle(
+        runtime=runtime,
+        event=_event(),
+        text="记住这个事实",
+    )
+    assert pending is not None and "确认执行" in pending.message
+
+    result = await harness.confirm(runtime=runtime, event=_event())
+
+    assert result == "执行失败：内部错误，请稍后重试。"
+    assert "/secret/internal.db" not in result
+    assert await db.fetchone(
+        "SELECT status FROM pending_agent_actions ORDER BY id DESC LIMIT 1",
+        (),
+    ) == {"status": "failed"}
 
 
 @pytest.mark.asyncio
