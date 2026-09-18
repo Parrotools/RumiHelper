@@ -277,3 +277,32 @@ async def test_enqueue_truncates_oversized_message_before_persistence(db):
     assert row is not None
     assert len(row["content"]) <= QQ_TEXT_SAFE_LIMIT
     assert "内容过长已截断" in row["content"]
+
+async def test_repository_outbox_apis_bound_content_without_dispatcher(db):
+    oversized = "x" * (QQ_TEXT_SAFE_LIMIT + 500)
+    first_id = await db.enqueue_outbound_message(
+        "user",
+        "123",
+        oversized,
+        3,
+    )
+    assert await db.enqueue_outbound_messages(
+        [
+            {
+                "target_type": "group",
+                "target_id": "456",
+                "content": oversized,
+            }
+        ],
+        3,
+    ) == 1
+
+    rows = await db.fetchall(
+        "SELECT id, content FROM outbound_messages ORDER BY id",
+        (),
+    )
+    assert rows[0]["id"] == first_id
+    assert len(rows) == 2
+    for row in rows:
+        assert len(row["content"]) <= QQ_TEXT_SAFE_LIMIT
+        assert "内容过长已截断" in row["content"]
