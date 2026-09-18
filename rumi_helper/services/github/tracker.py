@@ -148,9 +148,42 @@ class GitHubTracker:
         del task
         if self._dispatcher is None:
             raise GitHubTrackerError("GitHub 通知未配置消息发送器")
+
+        snapshots: dict[tuple[str, str], GitHubSnapshot] = {}
+        failed_repositories: set[tuple[str, str]] = set()
         for repo in await self._db.fetch_github_repositories():
+            repository_key = (
+                str(repo["repo_owner"]).lower(),
+                str(repo["repo_name"]).lower(),
+            )
+            if repository_key in failed_repositories:
+                continue
+            snapshot = snapshots.get(repository_key)
+            if snapshot is None:
+                try:
+                    snapshot = await self._client.fetch_snapshot(
+                        GitHubRepoRef(
+                            repo["repo_owner"],
+                            repo["repo_name"],
+                            repo["repo_url"],
+                        )
+                    )
+                except Exception:
+                    logger.exception(
+                        "GitHub 检查获取失败 repo=%s/%s",
+                        repo["repo_owner"],
+                        repo["repo_name"],
+                    )
+                    failed_repositories.add(repository_key)
+                    continue
+                snapshots[repository_key] = snapshot
+
             try:
-                await self._check_row(repo, queue_notifications=True)
+                await self._check_row(
+                    repo,
+                    queue_notifications=True,
+                    snapshot=snapshot,
+                )
             except Exception:
                 logger.exception("GitHub 检查失败 repo_id=%s", repo["id"])
 
@@ -206,13 +239,24 @@ class GitHubTracker:
             return
         self._dispatcher.notify_queue_changed()
 
-    async def _check_row(self, repo: dict, *, queue_notifications: bool = False) -> dict:
+    async def _check_row(
+        self,
+        repo: dict,
+        *,
+        queue_notifications: bool = False,
+        snapshot: GitHubSnapshot | None = None,
+    ) -> dict:
         repo_id = int(repo["id"])
         lock = self._repo_check_locks.setdefault(repo_id, asyncio.Lock())
         async with lock:
-            snapshot = await self._client.fetch_snapshot(
-                GitHubRepoRef(repo["repo_owner"], repo["repo_name"], repo["repo_url"])
-            )
+            if snapshot is None:
+                snapshot = await self._client.fetch_snapshot(
+                    GitHubRepoRef(
+                        repo["repo_owner"],
+                        repo["repo_name"],
+                        repo["repo_url"],
+                    )
+                )
             previous = await self._db.fetch_latest_github_snapshot(repo_id)
             changes = compare_snapshots(previous, snapshot)
             result = {"repo": repo, "snapshot": snapshot, "changes": changes}

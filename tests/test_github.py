@@ -173,8 +173,10 @@ async def test_github_client_wraps_invalid_commits_json_response():
 class FakeGitHubClient:
     def __init__(self, snapshot):
         self.snapshot = snapshot
+        self.calls: list[tuple[str, str]] = []
 
     async def fetch_snapshot(self, ref):
+        self.calls.append((str(ref.owner), str(ref.name)))
         return self.snapshot
 
 
@@ -299,6 +301,31 @@ class FakeDispatcher:
 
     def notify_queue_changed(self):
         self.wake_calls += 1
+
+
+async def test_scheduled_check_reuses_one_network_snapshot_for_duplicate_repositories(db):
+    client = FakeGitHubClient(_snapshot("same"))
+    dispatcher = FakeDispatcher()
+    tracker = GitHubTracker(db, client, dispatcher)
+
+    await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+    await tracker.add_repository(
+        "user-2",
+        "https://github.com/OpenAI/openai-python",
+    )
+
+    await tracker.run_scheduled_check({})
+
+    assert client.calls == [("OpenAI", "openai-python")]
+    rows = await db.fetchall(
+        "SELECT repo_id, latest_commit_sha FROM github_snapshots ORDER BY repo_id",
+        (),
+    )
+    assert len(rows) == 2
+    assert {row["latest_commit_sha"] for row in rows} == {"same"}
 
 
 async def test_scheduled_check_sends_only_when_github_notifications_are_enabled(db):
