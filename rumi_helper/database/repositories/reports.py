@@ -37,13 +37,14 @@ class ReportRepository:
         period_end: str,
         content: str,
     ) -> int:
+        del content
         async with self.operation():
             await self.conn.execute(
                 "INSERT INTO reports (owner_id, report_type, period_start, period_end, content) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, '') "
                 "ON CONFLICT(owner_id, report_type, period_start) DO UPDATE SET "
-                "period_end = excluded.period_end, content = excluded.content",
-                (owner_id, report_type, period_start, period_end, content),
+                "period_end = excluded.period_end, content = ''",
+                (owner_id, report_type, period_start, period_end),
             )
             await self.conn.commit()
             row = await self.fetchone(
@@ -70,15 +71,14 @@ class ReportRepository:
                     report_type = str(item["report_type"])
                     period_start = str(item["period_start"])
                     period_end = str(item["period_end"])
-                    content = str(item["content"])
                     delivery_content = str(item["delivery_content"])
 
                     async with self.conn.execute(
                         "INSERT INTO reports "
                         "(owner_id, report_type, period_start, period_end, content) "
-                        "VALUES (?, ?, ?, ?, ?) "
+                        "VALUES (?, ?, ?, ?, '') "
                         "ON CONFLICT(owner_id, report_type, period_start) DO NOTHING",
-                        (owner_id, report_type, period_start, period_end, content),
+                        (owner_id, report_type, period_start, period_end),
                     ) as cursor:
                         created = cursor.rowcount == 1
 
@@ -97,9 +97,9 @@ class ReportRepository:
                         queued += 1
                     else:
                         await self.conn.execute(
-                            "UPDATE reports SET period_end = ?, content = ? "
+                            "UPDATE reports SET period_end = ?, content = '' "
                             "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
-                            (period_end, content, owner_id, report_type, period_start),
+                            (period_end, owner_id, report_type, period_start),
                         )
 
                 await self.conn.commit()

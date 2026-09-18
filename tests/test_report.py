@@ -83,6 +83,16 @@ async def test_scheduled_daily_report_respects_user_setting_and_sends(db):
 
     assert dispatcher.enqueued == []
     assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT content FROM reports",
+        (),
+    ) == {"content": ""}
+    outbound_body = await db.fetchone(
+        "SELECT content FROM outbound_messages",
+        (),
+    )
+    assert outbound_body is not None
+    assert "【每日总结 2030-01-02】" in outbound_body["content"]
     outbound = await db.fetchone(
         "SELECT target_type, target_id, status, max_attempts FROM outbound_messages",
         (),

@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     finally:
         await upgraded.close()
 
@@ -186,7 +186,7 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
 
 
 async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
-    expected = list(range(1, 11))
+    expected = list(range(1, 12))
     for index in range(10):
         path = str(tmp_path / f"concurrent-connect-{index}.db")
         first = Database(path)
@@ -316,5 +316,31 @@ async def test_terminal_confirmation_redaction_migration_keeps_only_live_payload
                 "content": "needed broadcast",
             },
         ]
+    finally:
+        await database.close()
+
+
+async def test_report_content_redaction_migration_clears_historical_report_bodies(tmp_path):
+    path = str(tmp_path / "report-redaction.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.execute(
+            "INSERT INTO reports "
+            "(owner_id, report_type, period_start, period_end, content) "
+            "VALUES ('u1', 'daily', '2030-01-01 00:00:00', "
+            "'2030-01-02 00:00:00', 'private report body')"
+        )
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    database = Database(path)
+    await database.connect()
+    try:
+        assert await database.fetchone(
+            "SELECT content FROM reports",
+            (),
+        ) == {"content": ""}
     finally:
         await database.close()

@@ -208,6 +208,10 @@ SET targets_json = '[]', content = ''
 WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed');
 """
 
+REPORT_CONTENT_REDACTION_SCHEMA = """
+UPDATE reports SET content = '' WHERE content <> '';
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,4 +240,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (8, SYSTEM_TASK_UNIQUENESS_SCHEMA),
     (9, DELIVERY_CONTENT_REDACTION_SCHEMA),
     (10, TERMINAL_CONFIRMATION_REDACTION_SCHEMA),
+    (11, REPORT_CONTENT_REDACTION_SCHEMA),
 )
