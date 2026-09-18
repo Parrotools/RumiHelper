@@ -111,7 +111,7 @@ def test_system_prompt_keeps_runtime_context_out_of_personality_file():
     assert "relationship: owner" in prompt
     assert "mode: technical" in prompt
     assert "sender_display_name: Parrotools 伪造字段" in prompt
-    assert "2261216827" not in prompt
+    assert "123456789" not in prompt
 
 
 def test_owner_identity_is_explicitly_verified_in_system_prompt():
@@ -242,7 +242,7 @@ async def test_chat_uses_configured_owner_id_and_contextual_sampling(monkeypatch
         sessions=FakeSessions(),
         llm=FakeLLM(),
         settings=SimpleNamespace(
-            group_shared_context=False, llm_temperature=0.7, owner_qq_id="2261216827", owner_name="Parrotools"
+            group_shared_context=False, llm_temperature=0.7, owner_qq_id="123456789", owner_name="Parrotools"
         ),
     )
     event = PrivateMessageEvent(
@@ -250,13 +250,13 @@ async def test_chat_uses_configured_owner_id_and_contextual_sampling(monkeypatch
         self_id="10000",
         post_type="message",
         sub_type="friend",
-        user_id=2261216827,
+        user_id=123456789,
         message_type="private",
         message_id=2,
         message=Message("这代码又炸了"),
         raw_message="这代码又炸了",
         font=0,
-        sender=Sender(user_id=2261216827, nickname="not-authoritative"),
+        sender=Sender(user_id=123456789, nickname="not-authoritative"),
     )
 
     async def fake_send(message: str):
@@ -297,7 +297,7 @@ async def test_owner_identity_question_uses_verified_identity(monkeypatch):
         sessions=FakeSessions(),
         llm=FakeLLM(),
         settings=SimpleNamespace(
-            group_shared_context=False, llm_temperature=0.7, owner_qq_id="2261216827", owner_name="Parrotools"
+            group_shared_context=False, llm_temperature=0.7, owner_qq_id="123456789", owner_name="Parrotools"
         ),
     )
     event = PrivateMessageEvent(
@@ -305,13 +305,13 @@ async def test_owner_identity_question_uses_verified_identity(monkeypatch):
         self_id="10000",
         post_type="message",
         sub_type="friend",
-        user_id=2261216827,
+        user_id=123456789,
         message_type="private",
         message_id=3,
         message=Message("你认识我吗？"),
         raw_message="你认识我吗？",
         font=0,
-        sender=Sender(user_id=2261216827, nickname="Parrotools"),
+        sender=Sender(user_id=123456789, nickname="Parrotools"),
     )
 
     async def fake_send(message: str):
