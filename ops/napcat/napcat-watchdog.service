@@ -3,4 +3,7 @@ Description=NapCat OneBot connection watchdog
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/napcat/napcat.env
 ExecStart=/usr/local/sbin/napcat-watchdog
+TimeoutStartSec=90
+UMask=0077

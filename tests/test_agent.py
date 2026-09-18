@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -313,3 +314,126 @@ async def test_admin_schedule_topic_and_broadcast_are_guarded(db):
     assert runtime.dispatcher.calls == []
     assert await harness.confirm(runtime=runtime, event=_event("admin")) == "发送完成\n成功：2\n失败：0"
     assert len(runtime.dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_agent_action_replacement_is_serialized(db):
+    async def create(tool_name: str) -> int:
+        return await db.create_pending_agent_action(
+            "user-1",
+            "private:user-1",
+            tool_name,
+            "{}",
+            tool_name,
+            "9999-01-01T00:00:00+00:00",
+        )
+
+    await asyncio.gather(create("memory_save"), create("clear_session"))
+
+    rows = await db.fetchall(
+        "SELECT tool_name, status FROM pending_agent_actions ORDER BY id",
+        (),
+    )
+    assert [row["status"] for row in rows].count("pending") == 1
+    assert [row["status"] for row in rows].count("cancelled") == 1
+
+
+@pytest.mark.asyncio
+async def test_executing_agent_action_cannot_be_cancelled(db):
+    action_id = await db.create_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "memory_save",
+        "{}",
+        "save",
+        "9999-01-01T00:00:00+00:00",
+    )
+    claimed = await db.claim_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "2000-01-01T00:00:00+00:00",
+    )
+
+    assert claimed is not None and claimed["id"] == action_id
+    assert await db.finish_pending_agent_action(action_id, "cancelled") is False
+    assert await db.finish_pending_agent_action(action_id, "confirmed") is True
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_watch_github_to_another_user(db):
+    github = FakeGitHub()
+    runtime = _runtime(
+        db,
+        FakeLLM(
+            '{"action":"github_watch_repository","arguments":'
+            '{"url":"OpenAI/openai-python","target":"user:20002"}}'
+        ),
+        github,
+    )
+    harness = AgentHarness()
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=_event("20001"),
+        text="把 OpenAI/openai-python 的更新通知给 QQ 20002",
+    )
+
+    assert result is not None
+    assert result.message == "该操作仅管理员可用。"
+    assert github.watched == []
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM pending_agent_actions",
+        (),
+    ) == {"count": 0}
+
+
+@pytest.mark.asyncio
+async def test_github_watch_confirmation_rechecks_admin_permission(db):
+    github = FakeGitHub()
+    runtime = _runtime(
+        db,
+        FakeLLM(
+            '{"action":"github_watch_repository","arguments":'
+            '{"url":"OpenAI/openai-python","target":"user:20002"}}'
+        ),
+        github,
+    )
+    harness = AgentHarness()
+
+    pending = await harness.try_handle(
+        runtime=runtime,
+        event=_event("admin"),
+        text="把 OpenAI/openai-python 的更新通知给 QQ 20002",
+    )
+    assert pending is not None and "确认执行" in pending.message
+
+    runtime.permission = SimpleNamespace(is_admin=lambda _user_id: False)
+    confirmed = await harness.confirm(runtime=runtime, event=_event("admin"))
+
+    assert confirmed == "执行失败：当前账号已不再具备管理员权限"
+    assert github.watched == []
+    assert await db.fetchone(
+        "SELECT status FROM pending_agent_actions ORDER BY id DESC LIMIT 1",
+        (),
+    ) == {"status": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_agent_status_is_minimal_for_non_admin(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"status","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=_event("user-1"),
+        text="看看机器人状态",
+    )
+
+    assert result is not None
+    assert "服务：正常" in result.message
+    assert "GitHub 监控" not in result.message
+    assert "Memory" not in result.message

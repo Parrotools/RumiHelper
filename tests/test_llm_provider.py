@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 
@@ -78,4 +80,51 @@ async def test_timeout():
     provider = OpenAICompatibleProvider(BASE, "k", "m", transport=httpx.MockTransport(handler))
     with pytest.raises(LLMTimeoutError):
         await provider.chat([{"role": "user", "content": "hi"}])
+    await provider.aclose()
+
+
+async def test_health_check_respects_same_concurrency_limit_as_chat():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingTransport(httpx.AsyncBaseTransport):
+        def __init__(self):
+            self.calls = 0
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            self.calls += 1
+            if self.calls == 1:
+                entered.set()
+                await release.wait()
+                return httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"content": "ok"}}]},
+                    request=request,
+                )
+            return httpx.Response(200, json={"data": []}, request=request)
+
+    transport = BlockingTransport()
+    provider = OpenAICompatibleProvider(
+        BASE,
+        "k",
+        "m",
+        max_concurrency=1,
+        transport=transport,
+    )
+
+    chat_task = asyncio.create_task(
+        provider.chat([{"role": "user", "content": "hi"}])
+    )
+    await entered.wait()
+    health_task = asyncio.create_task(provider.check_health())
+    await asyncio.sleep(0)
+
+    assert transport.calls == 1
+    assert health_task.done() is False
+
+    release.set()
+    await chat_task
+    await health_task
+    assert transport.calls == 2
+
     await provider.aclose()

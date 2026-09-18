@@ -2,6 +2,8 @@
 
 import re
 from collections import OrderedDict
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from nonebot import get_bot, logger, on_message
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
@@ -12,7 +14,7 @@ from app.promptlib import load_prompt
 from app.services.llm.base import LLMError
 from app.services.runtime import get_runtime
 from app.services.session.manager import SessionManager
-from app.utils import send_local_reply, truncate_for_qq
+from app.utils import send_local_reply, send_reply, truncate_for_qq
 
 CHAT_SYSTEM_PROMPT = load_prompt("chat.txt")
 
@@ -21,10 +23,12 @@ KNOWN_COMMANDS = {
     "/ai", "/clear", "/总结", "/summary", "/broadcast",
     "/confirm", "/cancel", "/status", "/状态", "/help", "/帮助", "/remember", "/memories", "/memory",
     "/remind", "/notify", "/schedule", "/github", "/report", "/日报", "/agent",
+    "/group-feedback", "/群聊反馈",
 }
 _DELEGATED_COMMANDS = {
     "/总结", "/summary", "/broadcast", "/confirm", "/cancel", "/status", "/状态",
     "/remember", "/memories", "/memory", "/remind", "/notify", "/schedule", "/github", "/report", "/日报", "/agent",
+    "/group-feedback", "/群聊反馈",
 }
 
 HELP_TEXT = (
@@ -48,6 +52,8 @@ HELP_TEXT = (
     "/github watch <URL> user:QQ号|group:群号 —— 仓库变化通知目标\n"
     "/github digest set user:QQ号1,user:QQ号2,group:群号 —— 设置定时汇总目标\n"
     "/github digest list|clear —— 查看或清空定时汇总目标\n"
+    "/group-feedback on|off|status —— 管理员开关当前群普通成员的反馈\n"
+    "/群聊反馈 开|关|状态 —— 上述命令的中文写法\n"
     "/report 或 /日报 —— 查看今日汇总\n"
     "/status 或 /状态 —— 查看运行状态\n"
     "/broadcast user:QQ号,group:群号 -- 消息 —— 管理员群发（先预览）\n"
@@ -381,6 +387,27 @@ def _session_key(event: MessageEvent) -> str:
     return SessionManager.private_key(str(event.user_id))
 
 
+@asynccontextmanager
+async def _session_turn(sessions, session_key: str) -> AsyncIterator[None]:
+    """Use SessionManager turn locking while keeping lightweight test doubles compatible."""
+    turn = getattr(sessions, "turn", None)
+    if turn is None:
+        yield
+        return
+    async with turn(session_key):
+        yield
+
+
+async def _append_turn(sessions, session_key: str, user_text: str, assistant_text: str) -> None:
+    """Persist a full turn atomically when supported by the concrete SessionManager."""
+    append_turn = getattr(sessions, "append_turn", None)
+    if append_turn is not None:
+        await append_turn(session_key, user_text, assistant_text)
+        return
+    await sessions.append(session_key, "user", user_text)
+    await sessions.append(session_key, "assistant", assistant_text)
+
+
 async def _trigger(event: MessageEvent) -> bool:
     if _is_self(event):
         return False  # 过滤自己的消息，防循环
@@ -419,50 +446,71 @@ async def _handle(event: MessageEvent):
         await send_local_reply(matcher, runtime, f"未知命令 {first_token}。\n\n{HELP_TEXT}")
         return
     if text == "/clear":
-        await runtime.sessions.clear(session_key)
-        await send_local_reply(matcher, runtime, "当前会话已清空。")
+        async with _session_turn(runtime.sessions, session_key):
+            await runtime.sessions.clear(session_key)
+            await send_local_reply(matcher, runtime, "当前会话已清空。")
         return
     if not text:
         await send_local_reply(matcher, runtime, "有什么想问的？直接发消息，或用 /ai <问题>。")
         return
 
-    identity_reply = _owner_identity_reply(event, text, runtime)
-    if identity_reply is not None:
-        await runtime.sessions.append(session_key, "user", text)
-        await runtime.sessions.append(session_key, "assistant", identity_reply)
-        await send_local_reply(matcher, runtime, identity_reply)
-        return
-
-    history = await runtime.sessions.get_context(session_key)
-    agent = getattr(runtime, "agent", None)
-    if getattr(runtime.settings, "agent_tool_calling_enabled", True) and agent is not None:
-        agent_result = await agent.try_handle(
-            runtime=runtime, event=event, text=text, history=history
-        )
-        if agent_result is not None and agent_result.handled:
-            await runtime.sessions.append(session_key, "user", text)
-            await runtime.sessions.append(session_key, "assistant", agent_result.message)
-            await send_local_reply(matcher, runtime, agent_result.message)
+    async with _session_turn(runtime.sessions, session_key):
+        identity_reply = _owner_identity_reply(event, text, runtime)
+        if identity_reply is not None:
+            await _append_turn(runtime.sessions, session_key, text, identity_reply)
+            await send_local_reply(matcher, runtime, identity_reply)
             return
-    memory_context = await runtime.memory.context_prompt(str(event.user_id))
-    prompt_text = await _with_reply_context(event, text)
-    messages, context = _build_chat_messages(
-        runtime, event, prompt_text, history, memory_context, context_text=text
-    )
 
-    logger.info("LLM chat session=%s user=%s group=%s msg=%s",
-                session_key, event.user_id, getattr(event, "group_id", "-"), event.message_id)
-    try:
-        reply = await runtime.llm.chat(messages, temperature=_temperature(runtime, context.mode))
-    except LLMError:
-        logger.exception("LLM 调用失败 session=%s", session_key)
-        await matcher.send("AI 服务暂时不可用，请稍后再试。")
-        return
+        history = await runtime.sessions.get_context(session_key)
+        agent = getattr(runtime, "agent", None)
+        if getattr(runtime.settings, "agent_tool_calling_enabled", True) and agent is not None:
+            agent_result = await agent.try_handle(
+                runtime=runtime,
+                event=event,
+                text=text,
+                history=history,
+            )
+            if agent_result is not None and agent_result.handled:
+                await _append_turn(
+                    runtime.sessions,
+                    session_key,
+                    text,
+                    agent_result.message,
+                )
+                await send_local_reply(matcher, runtime, agent_result.message)
+                return
 
-    # 成功后才落库，失败轮次不污染上下文
-    await runtime.sessions.append(session_key, "user", prompt_text)
-    await runtime.sessions.append(session_key, "assistant", reply)
-    await matcher.send(truncate_for_qq(reply))
+        memory_context = await runtime.memory.context_prompt(str(event.user_id))
+        prompt_text = await _with_reply_context(event, text)
+        messages, context = _build_chat_messages(
+            runtime,
+            event,
+            prompt_text,
+            history,
+            memory_context,
+            context_text=text,
+        )
+
+        logger.info(
+            "LLM chat session=%s user=%s group=%s msg=%s",
+            session_key,
+            event.user_id,
+            getattr(event, "group_id", "-"),
+            event.message_id,
+        )
+        try:
+            reply = await runtime.llm.chat(
+                messages,
+                temperature=_temperature(runtime, context.mode),
+            )
+        except LLMError:
+            logger.exception("LLM 调用失败 session=%s", session_key)
+            await send_reply(matcher, runtime, "AI 服务暂时不可用，请稍后再试。")
+            return
+
+        # 成功后才落库，失败轮次不污染上下文
+        await _append_turn(runtime.sessions, session_key, prompt_text, reply)
+        await send_reply(matcher, runtime, truncate_for_qq(reply))
 
 
 # 群聊轻量命令：/clear、/help 也必须 @ 机器人
@@ -485,8 +533,10 @@ async def _handle_meta(event: GroupMessageEvent):
     runtime = get_runtime()
     text = strip_bot_mention(event.message.extract_plain_text())
     if text == "/clear":
-        await runtime.sessions.clear(_session_key(event))
-        await send_local_reply(meta_matcher, runtime, "当前会话已清空。")
+        session_key = _session_key(event)
+        async with _session_turn(runtime.sessions, session_key):
+            await runtime.sessions.clear(session_key)
+            await send_local_reply(meta_matcher, runtime, "当前会话已清空。")
     else:
         await send_local_reply(meta_matcher, runtime, HELP_TEXT)
 

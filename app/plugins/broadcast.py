@@ -147,6 +147,8 @@ async def _handle_cancel(event: MessageEvent):
     if pending is None:
         await send_local_reply(cancel_matcher, runtime, "没有待取消的群发任务。")
         return
-    await runtime.db.finish_pending(pending["id"], "cancelled")
+    if not await runtime.db.finish_pending(pending["id"], "cancelled"):
+        await send_local_reply(cancel_matcher, runtime, "该任务已被处理。")
+        return
     logger.info("broadcast 取消 pending_id=%s admin=%s", pending["id"], sender_id)
     await send_local_reply(cancel_matcher, runtime, "已取消。")

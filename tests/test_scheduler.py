@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -204,3 +205,97 @@ async def test_system_task_cron_is_updated_and_can_be_disabled(db):
     await scheduler.sync_system_task("github_check", "")
     disabled = await db.fetch_scheduled_task_by_owner_type("__system__", "github_check")
     assert disabled["enabled"] == 0
+
+
+async def test_system_task_cron_updates_live_scheduler_without_restart(db):
+    async def github_check(_task: dict) -> None:
+        return None
+
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    scheduler.register_handler("github_check", github_check)
+    task_id = await scheduler.create_task(
+        "__system__",
+        "github_check",
+        {},
+        cron_expression="0 * * * *",
+    )
+
+    await scheduler.start()
+    try:
+        job_id = scheduler._job_id(task_id)
+        old_trigger = str(scheduler._scheduler.get_job(job_id).trigger)
+
+        await scheduler.sync_system_task("github_check", "5 * * * *")
+        updated_job = scheduler._scheduler.get_job(job_id)
+        assert updated_job is not None
+        assert str(updated_job.trigger) != old_trigger
+        assert "minute='5'" in str(updated_job.trigger)
+
+        await scheduler.sync_system_task("github_check", "")
+        assert scheduler._scheduler.get_job(job_id) is None
+    finally:
+        await scheduler.stop()
+
+
+async def test_disabling_running_system_task_is_not_overwritten_by_stale_run(db):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def github_check(_task: dict) -> None:
+        entered.set()
+        await release.wait()
+
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    scheduler.register_handler("github_check", github_check)
+    task_id = await scheduler.create_task(
+        "__system__",
+        "github_check",
+        {},
+        cron_expression="0 * * * *",
+    )
+
+    running = asyncio.create_task(scheduler.run_task(task_id))
+    await entered.wait()
+
+    await scheduler.sync_system_task("github_check", "")
+    release.set()
+    await running
+
+    task = await db.fetch_scheduled_task(task_id)
+    assert task["enabled"] == 0
+    assert task["cron_expression"] is None
+    assert task["next_run"] is None
+
+
+async def test_stop_waits_for_inflight_task(db):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def slow_task(_task: dict) -> None:
+        entered.set()
+        await release.wait()
+        finished.set()
+
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    scheduler.register_handler("slow", slow_task)
+    task_id = await scheduler.create_task(
+        "owner",
+        "slow",
+        {},
+        cron_expression="0 * * * *",
+    )
+    await scheduler.start()
+    running = asyncio.create_task(scheduler.run_task(task_id))
+    await entered.wait()
+
+    stopping = asyncio.create_task(scheduler.stop())
+    await asyncio.sleep(0)
+    assert stopping.done() is False
+
+    release.set()
+    await stopping
+    await running
+
+    assert finished.is_set()
+    assert scheduler.is_running is False

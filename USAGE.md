@@ -32,15 +32,16 @@
 | `/schedule group:群号 时间或 cron -- 内容` | 仅管理员 | 私聊/群聊 | 创建一次性或周期定时群发 |
 | `/schedule joke group:群号 时间或 cron -- 主题` | 仅管理员 | 私聊/群聊 | 按主题生成不同段子并定时发送 |
 | `/notify github on\|off` | 所有人 | 私聊/群聊 | 开关 GitHub 仓库变化通知 |
-| `/github add\|remove\|list\|check\|info\|watch ...` | 所有人 | 私聊/群聊 | 管理自己的 GitHub 仓库监控 |
+| `/github add\|remove\|list\|check\|info\|watch ...` | 所有人 | 私聊/群聊 | 管理自己的 GitHub 仓库监控；普通用户的 watch 目标只能是 `user:自己的QQ`，其他用户或群聊仅管理员可配置 |
 | 自然语言工具操作 | 所有人（管理员操作仍需管理员权限） | 私聊/群聊 | 直接描述 GitHub、记忆、提醒、通知、定时、日报、状态等操作；写操作需二次确认 |
 | `/report`、`/日报` | 所有人 | 私聊/群聊 | 查看当天日报 |
 | `/help`、`/帮助` | 所有人 | 私聊/群聊 | 显示帮助 |
 | `/总结 <URL>`、`/summary <URL>` | 所有人 | 私聊/群聊 | 抓取并总结网页 |
-| `/status`、`/状态` | 所有人 | 私聊/群聊 | 查看运行状态（无密钥） |
+| `/status`、`/状态` | 所有人 | 私聊/群聊 | 普通用户只看基础可用性与运行时间；管理员可看完整运维诊断（均不显示密钥） |
 | `/broadcast 目标 -- 消息` | 仅管理员 | 私聊/群聊 | 多目标群发（先出预览） |
 | `/confirm` | 仅管理员（发起者本人） | 同上 | 确认执行群发 |
 | `/cancel` | 仅管理员（发起者本人） | 同上 | 取消群发 |
+| `/group-feedback on\|off\|status`、`/群聊反馈 开\|关\|状态` | 仅 Bot 管理员 | 群聊 | 开关或查看当前群普通成员的反馈；关闭后普通成员的聊天和命令均静默 |
 
 私聊中发送未知的 `/xxx` 命令会收到"未知命令 + 帮助"，不会被当成问题发给 LLM。
 
@@ -189,7 +190,7 @@
 - 同一 URL 在 `WEB_CACHE_TTL_SECONDS`（默认 600 秒）内重复总结不会重新抓取。
 - 超长网页自动分块（`WEB_SUMMARY_CHUNK_CHARS`），分块摘要后合并；超过 `WEB_SUMMARY_MAX_CHUNKS` 段时截断并在结尾注明。
 - 目标网页是内网地址 / IP 保留段 / 非网页内容（如文件下载）会被拒绝。
-- 普通抓取失败且 `ENABLE_PLAYWRIGHT=true` 时，自动改用 Playwright 渲染后重试一次。
+- 普通抓取失败且 `ENABLE_PLAYWRIGHT=true` 时，自动改用 Playwright 渲染后重试一次；浏览器的每个 HTTP(S) 请求在真正发出前都会重新做 SSRF 校验并阻断私网目标。
 
 **错误提示对照**：
 
@@ -259,7 +260,12 @@ user:789012
 
 ## 5. 管理员：其他命令
 
-- `/status` 或 `/状态`：查看模型名、自动总结模式、活跃会话数、群发配置、管理员数量等（不显示任何密钥）。
+- `/status` 或 `/状态`：普通用户只看到服务是否正常和运行时间；管理员额外看到依赖、Scheduler、GitHub/Memory 计数与最近投递错误（不显示任何密钥）。
+- `/group-feedback off`（或 `/群聊反馈 关`）：关闭当前群普通成员的反馈。普通成员的 @、回复、自然语言和所有命令都不会得到回应；Bot 管理员不受影响。
+- `/group-feedback on`（或 `/群聊反馈 开`）：重新开启当前群普通成员的反馈。
+- `/group-feedback status`（或 `/群聊反馈 状态`）：查看当前群开关状态。
+
+群聊中这些命令需要先 @机器人；未配置过的群默认开启。开关状态写入 SQLite，Bot 重启后仍然保留。
 
 ## 6. 配置项速查
 
@@ -291,6 +297,9 @@ user:789012
 | `ADMIN_QQ_IDS` | — | 管理员，逗号分隔 |
 | `MAX_BROADCAST_RECIPIENTS` | 20 | 群发目标上限 |
 | `SEND_RATE_LIMIT_PER_SECOND` | 1 | 发送限速 |
+| `INTERACTIVE_SEND_RATE_LIMIT_PER_SECOND` | 0.5 | 所有交互回复的统一发送速率 |
+| `OUTBOUND_ACCOUNT_PAUSE_SECONDS` | 1800 | 检测到账号掉线/登录态失效后暂停主动投递的秒数 |
+| `OUTBOUND_RATE_LIMIT_PAUSE_SECONDS` | 60 | 检测到接口限流后暂停主动投递的秒数 |
 | `BROADCAST_REQUIRE_CONFIRM` | true | 群发预览确认 |
 | `BROADCAST_CONFIRM_TTL_SECONDS` | 300 | 确认有效期 |
 | `MAX_CONCURRENT_WEB_TASKS` / `_LLM_TASKS` | 3 / 5 | 并发上限 |

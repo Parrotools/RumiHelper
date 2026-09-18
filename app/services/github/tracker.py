@@ -1,5 +1,6 @@
 """GitHub 仓库登记、快照和变化检测。"""
 
+import asyncio
 import logging
 import re
 from datetime import UTC, datetime, tzinfo
@@ -83,6 +84,7 @@ class GitHubTracker:
         self._dispatcher = dispatcher
         self._notifications = notifications or NotificationSettingsService(db)
         self._timezone = ZoneInfo(timezone_name)
+        self._repo_check_locks: dict[int, asyncio.Lock] = {}
 
     async def add_repository(self, owner_id: str, url: str) -> dict:
         owner_id = str(owner_id).strip()
@@ -170,13 +172,16 @@ class GitHubTracker:
                 )
 
     async def _check_row(self, repo: dict) -> dict:
-        snapshot = await self._client.fetch_snapshot(
-            GitHubRepoRef(repo["repo_owner"], repo["repo_name"], repo["repo_url"])
-        )
-        previous = await self._db.fetch_latest_github_snapshot(repo["id"])
-        changes = compare_snapshots(previous, snapshot)
-        await self._db.insert_github_snapshot(repo["id"], snapshot.to_dict())
-        return {"repo": repo, "snapshot": snapshot, "changes": changes}
+        repo_id = int(repo["id"])
+        lock = self._repo_check_locks.setdefault(repo_id, asyncio.Lock())
+        async with lock:
+            snapshot = await self._client.fetch_snapshot(
+                GitHubRepoRef(repo["repo_owner"], repo["repo_name"], repo["repo_url"])
+            )
+            previous = await self._db.fetch_latest_github_snapshot(repo_id)
+            changes = compare_snapshots(previous, snapshot)
+            await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
+            return {"repo": repo, "snapshot": snapshot, "changes": changes}
 
     async def watch(self, owner_id: str, url: str, target: str) -> None:
         repo = await self._get_owned_repository(owner_id, url)

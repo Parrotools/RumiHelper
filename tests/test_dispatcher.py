@@ -72,3 +72,25 @@ async def test_broadcast_empty_targets(db):
     d = MessageDispatcher(db, rate_limit_per_second=0, api_caller=_fake_caller(set()))
     report = await d.broadcast([], "msg")
     assert report.success_count == 0 and report.failed_count == 0
+
+
+async def test_direct_send_respects_persisted_cooldown_after_restart(db):
+    calls = 0
+
+    async def caller(action: str, **params) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"message_id": "unexpected"}
+
+    await db.extend_outbound_pause_until("9999-01-01 00:00:00")
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+
+    result = await dispatcher.send_user("123", "should wait")
+
+    assert result.success is False
+    assert "暂停" in (result.error or "")
+    assert calls == 0

@@ -118,6 +118,8 @@ def test_help_text_describes_reminders_and_broadcast_confirmation():
     assert "/broadcast user:QQ号,group:群号 -- 消息" in HELP_TEXT
     assert "/confirm —— 管理员确认执行群发" in HELP_TEXT
     assert "/cancel —— 管理员取消待确认的群发" in HELP_TEXT
+    assert "/group-feedback on|off|status" in HELP_TEXT
+    assert "/群聊反馈 开|关|状态" in HELP_TEXT
 
 
 # ---------- web_summary 触发规则 ----------

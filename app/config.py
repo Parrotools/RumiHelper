@@ -51,8 +51,13 @@ class Settings(BaseSettings):
     admin_qq_ids: str = ""
     max_broadcast_recipients: int = 20
     send_rate_limit_per_second: float = 1.0
+    # 所有交互回复共用的最小发送速率，避免多个并发会话瞬时集中发送
+    interactive_send_rate_limit_per_second: float = 0.5
     outbound_max_attempts: int = 3
     outbound_retry_delay_seconds: float = 30.0
+    # 账号掉线或触发接口限流时，暂停主动投递，避免继续撞接口
+    outbound_account_pause_seconds: float = 1800.0
+    outbound_rate_limit_pause_seconds: float = 60.0
     outbound_queue_poll_seconds: float = 1.0
     outbound_lease_seconds: float = 60.0
     broadcast_require_confirm: bool = True

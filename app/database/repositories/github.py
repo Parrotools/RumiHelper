@@ -1,0 +1,138 @@
+"""Database methods for GitHubRepository."""
+
+class GitHubRepository:
+    async def insert_github_repository(
+        self, owner_id: str, repo_owner: str, repo_name: str, repo_url: str
+    ) -> int:
+        async with self.operation():
+            await self.conn.execute(
+                "INSERT INTO github_repositories (owner_id, repo_owner, repo_name, repo_url) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(owner_id, repo_owner, repo_name) DO UPDATE SET repo_url = excluded.repo_url",
+                (owner_id, repo_owner, repo_name, repo_url),
+            )
+            await self.conn.commit()
+            row = await self.fetchone(
+                "SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+                (owner_id, repo_owner, repo_name),
+            )
+            return int(row["id"])
+
+    async def fetch_github_repository(
+        self, owner_id: str, repo_owner: str, repo_name: str
+    ) -> dict | None:
+        return await self.fetchone(
+            "SELECT * FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+            (owner_id, repo_owner, repo_name),
+        )
+
+    async def fetch_github_repositories(self, owner_id: str | None = None) -> list[dict]:
+        if owner_id is None:
+            return await self.fetchall("SELECT * FROM github_repositories ORDER BY id")
+        return await self.fetchall(
+            "SELECT * FROM github_repositories WHERE owner_id = ? ORDER BY id", (owner_id,)
+        )
+
+    async def fetch_github_digest_targets(self) -> list[dict]:
+        return await self.fetchall(
+            "SELECT target_type, target_id FROM github_digest_targets WHERE enabled = 1 "
+            "ORDER BY target_type, target_id"
+        )
+
+    async def replace_github_digest_targets(self, targets: list[dict]) -> None:
+        unique_targets = dict.fromkeys(
+            (str(target["target_type"]), str(target["target_id"])) for target in targets
+        )
+        async with self.operation():
+            try:
+                await self.conn.execute("DELETE FROM github_digest_targets")
+                await self.conn.executemany(
+                    "INSERT INTO github_digest_targets (target_type, target_id, enabled) VALUES (?, ?, 1)",
+                    list(unique_targets),
+                )
+                await self.conn.commit()
+            except Exception:
+                await self.conn.rollback()
+                raise
+
+    async def delete_github_repository(self, owner_id: str, repo_owner: str, repo_name: str) -> bool:
+        where = (owner_id, repo_owner, repo_name)
+        async with self.operation():
+            try:
+                await self.conn.execute(
+                    "DELETE FROM github_snapshots WHERE repo_id IN "
+                    "(SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?)",
+                    where,
+                )
+                await self.conn.execute(
+                    "DELETE FROM github_notifications WHERE repo_id IN "
+                    "(SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?)",
+                    where,
+                )
+                async with self.conn.execute(
+                    "DELETE FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+                    where,
+                ) as cursor:
+                    deleted = cursor.rowcount > 0
+                await self.conn.commit()
+                return deleted
+            except Exception:
+                await self.conn.rollback()
+                raise
+
+    async def insert_github_snapshot(self, repo_id: int, snapshot: dict) -> int:
+        async with self.operation():
+            cursor = await self.conn.execute(
+                "INSERT INTO github_snapshots "
+                "(repo_id, stars, forks, watchers, commits_count, latest_commit_sha, latest_commit_message, "
+                "latest_commit_author, latest_commit_time, latest_release, open_issues_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    repo_id,
+                    snapshot["stars"],
+                    snapshot["forks"],
+                    snapshot["watchers"],
+                    snapshot["commits_count"],
+                    snapshot["latest_commit_sha"],
+                    snapshot["latest_commit_message"],
+                    snapshot["latest_commit_author"],
+                    snapshot["latest_commit_time"],
+                    snapshot["latest_release"],
+                    snapshot["open_issues_count"],
+                ),
+            )
+            await self.conn.commit()
+            return int(cursor.lastrowid)
+
+    async def fetch_latest_github_snapshot(self, repo_id: int) -> dict | None:
+        return await self.fetchone(
+            "SELECT * FROM github_snapshots WHERE repo_id = ? ORDER BY id DESC LIMIT 1", (repo_id,)
+        )
+
+    async def upsert_github_notification(
+        self, repo_id: int, target_type: str, target_id: str, enabled: bool = True
+    ) -> None:
+        await self.execute(
+            "INSERT INTO github_notifications (repo_id, target_type, target_id, enabled) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(repo_id, target_type, target_id) DO UPDATE SET enabled = excluded.enabled",
+            (repo_id, target_type, target_id, int(enabled)),
+        )
+
+    async def fetch_github_notifications(self, repo_id: int) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM github_notifications WHERE repo_id = ? AND enabled = 1 ORDER BY target_type, target_id",
+            (repo_id,),
+        )
+
+    async def fetch_github_snapshots_between(self, repo_id: int, period_start: str, period_end: str) -> list[dict]:
+        return await self.fetchall(
+            "SELECT * FROM github_snapshots WHERE repo_id = ? AND datetime(captured_at) >= datetime(?) "
+            "AND datetime(captured_at) < datetime(?) ORDER BY id",
+            (repo_id, period_start, period_end),
+        )
+
+    async def fetch_latest_github_snapshot_before(self, repo_id: int, period_start: str) -> dict | None:
+        return await self.fetchone(
+            "SELECT * FROM github_snapshots WHERE repo_id = ? AND datetime(captured_at) < datetime(?) "
+            "ORDER BY id DESC LIMIT 1",
+            (repo_id, period_start),
+        )

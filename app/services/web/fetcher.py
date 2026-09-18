@@ -3,6 +3,7 @@
 带进程内 URL 结果缓存（TTL 可配），同一条链接短时间内重复总结不重复抓取。
 """
 
+import asyncio
 import re
 import time
 from collections import OrderedDict
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.security.ssrf import assert_url_safe
+from app.security.ssrf import SSRFBlockedError, assert_url_safe, resolve_url_safe
 
 CACHE_MAX_ENTRIES = 16
 
@@ -84,6 +85,7 @@ class WebFetcher:
         self._max_redirects = max_redirects
         self._cache_ttl = max(0.0, cache_ttl)
         self._cache: OrderedDict[str, tuple[float, FetchResult]] = OrderedDict()
+        self._inflight: dict[str, asyncio.Task[FetchResult]] = {}
         self._headers = {"User-Agent": user_agent, "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"}
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(read_timeout, connect=connect_timeout),
@@ -115,6 +117,12 @@ class WebFetcher:
             self._cache.popitem(last=False)
 
     async def aclose(self) -> None:
+        tasks = list(self._inflight.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._inflight.clear()
         await self._client.aclose()
 
     async def fetch(self, url: str) -> FetchResult:
@@ -122,6 +130,20 @@ class WebFetcher:
         if cached is not None:
             return cached
 
+        task = self._inflight.get(url)
+        if task is None:
+            task = asyncio.create_task(self._fetch_uncached(url))
+            self._inflight[url] = task
+            task.add_done_callback(
+                lambda done, key=url: self._forget_inflight(key, done)
+            )
+        return await asyncio.shield(task)
+
+    def _forget_inflight(self, url: str, task: asyncio.Task[FetchResult]) -> None:
+        if self._inflight.get(url) is task:
+            self._inflight.pop(url, None)
+
+    async def _fetch_uncached(self, url: str) -> FetchResult:
         current = url
         redirects = 0
         status_code = 0
@@ -130,10 +152,22 @@ class WebFetcher:
         body = b""
 
         while True:
-            # 每一跳都重新做 scheme + DNS + IP 校验（SSRF 核心要求）
-            await assert_url_safe(current)
+            # 每一跳都重新解析并校验，并把实际 TCP 连接固定到本次已校验的
+            # 公网 IP；Host/SNI 仍使用原域名，避免 DNS rebinding 的 TOCTOU。
+            parsed, ips = await resolve_url_safe(current)
+            pinned_url = parsed.copy_with(host=str(ips[0]))
+            host = parsed.host
+            host_header = f"[{host}]" if ":" in host else host
+            if parsed.port is not None:
+                host_header = f"{host_header}:{parsed.port}"
+            headers = {**self._headers, "Host": host_header}
             try:
-                async with self._client.stream("GET", current, headers=self._headers) as resp:
+                async with self._client.stream(
+                    "GET",
+                    pinned_url,
+                    headers=headers,
+                    extensions={"sni_hostname": parsed.host},
+                ) as resp:
                     status_code = resp.status_code
                     if status_code in REDIRECT_STATUSES:
                         location = resp.headers.get("location")
@@ -206,7 +240,33 @@ class PlaywrightFetcher:
                 browser = await p.chromium.launch(headless=True)
                 try:
                     page = await browser.new_page(user_agent=DEFAULT_USER_AGENT)
-                    await page.goto(url, timeout=self._timeout_ms, wait_until="domcontentloaded")
+                    blocked_error: SSRFBlockedError | None = None
+
+                    async def guard_request(route, request) -> None:
+                        nonlocal blocked_error
+                        request_url = str(request.url)
+                        if request_url.startswith(("http://", "https://")):
+                            try:
+                                await assert_url_safe(request_url)
+                            except SSRFBlockedError as exc:
+                                blocked_error = exc
+                                await route.abort()
+                                return
+                        await route.continue_()
+
+                    await page.route("**/*", guard_request)
+                    try:
+                        await page.goto(
+                            url,
+                            timeout=self._timeout_ms,
+                            wait_until="domcontentloaded",
+                        )
+                    except PlaywrightError as exc:
+                        if blocked_error is not None:
+                            raise blocked_error from exc
+                        raise
+                    if blocked_error is not None:
+                        raise blocked_error
                     final_url = page.url
                     await assert_url_safe(final_url)
                     html = await page.content()

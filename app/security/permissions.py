@@ -3,6 +3,17 @@
 from collections.abc import Iterable
 
 
+def notification_target_requires_admin(
+    actor_id: str,
+    target_type: str,
+    target_id: str,
+) -> bool:
+    """普通用户只能向自己的私聊配置主动通知目标。"""
+    return target_type == "group" or (
+        target_type == "user" and str(target_id) != str(actor_id)
+    )
+
+
 class PermissionService:
     def __init__(self, admin_ids: Iterable[str]):
         self._admin_ids = frozenset(str(x) for x in admin_ids)

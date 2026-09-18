@@ -5,6 +5,7 @@
 功能一览：
 
 - 私聊 / 群聊 @ / 回复机器人续聊，群内普通消息不响应，未知命令给帮助而不是丢给 LLM
+- 按群聊持久化控制反馈：关闭后普通成员的聊天和命令静默，Bot 管理员仍可使用
 - 多轮上下文会话（SQLite 持久化，群内成员默认独立上下文），`/clear` 清空
 - YAML 可配置人格（默认 Rumi）
 - 用户显式维护的长期记忆，并在聊天时按重要度加载
@@ -13,7 +14,7 @@
 - GitHub 仓库监控：手动检查、commit/Star/Fork/Issue/Release 变化通知
 - 自然语言工具操作：可直接描述 GitHub、记忆、提醒、通知、定时任务、日报、状态和管理员群发等操作；白名单工具执行，修改/发送操作二次确认
 - 每日日报：汇总 GitHub 变化、任务/提醒和重要记忆，可手动查看
-- 网页总结：识别消息中的 URL，抓取正文，超长网页 Map-Reduce 分块总结；URL 结果进程内缓存（TTL 可配）；可选 Playwright 渲染兜底
+- 网页总结：识别消息中的 URL，抓取正文，超长网页 Map-Reduce 分块总结；URL 结果进程内缓存（TTL 可配）；可选 Playwright 渲染兜底，并对浏览器每个 HTTP(S) 请求执行 SSRF 校验
 - 主动发送 / 多目标群发（仅管理员，带预览确认、TTL、限速、逐目标结果记录、旧待确认任务自动作废）
 - 安全：SSRF 逐跳校验、Prompt Injection 定界防御、核心聊天模型无发送能力、API Key 不入日志
 
@@ -32,10 +33,10 @@ NapCatQQ                    ← 只负责 QQ 协议 ↔ OneBot 11 转换
 NoneBot2 (FastAPI 驱动, ws://127.0.0.1:8080/onebot/v11/ws)
    │
    ├─ app/personality/    YAML 人格配置与加载
-   ├─ app/plugins/        事件路由：ai_chat / agent / web_summary / memory / scheduler / github / report / broadcast / admin
-   ├─ app/services/       业务层：LLM Gateway、Agent Harness、网页管道、会话、记忆、Scheduler、GitHub、Report、MessageDispatcher
+   ├─ app/plugins/        事件路由：ai_chat / agent / web_summary / memory / scheduler / github / report / broadcast / admin / group_feedback
+   ├─ app/services/       业务层：LLM Gateway、Agent Harness、网页管道、会话、记忆、Scheduler、GitHub、Report、MessageDispatcher、群聊反馈设置
    ├─ app/security/       权限、SSRF、Prompt Injection 防御
-   └─ app/database/       SQLite (aiosqlite)：sessions / messages / memories / scheduled_tasks / GitHub 快照 / send_logs
+   └─ app/database/       SQLite (aiosqlite)：db.py 管连接/migration，repositories/ 按领域拆分 sessions / messages / memories / scheduled_tasks / 群聊反馈 / GitHub / outbound SQL
 ```
 
 ## 环境要求
@@ -175,10 +176,12 @@ python bot.py
 | 网页总结 | `/总结 https://example.com` | 先回"正在读取"，再按固定格式返回摘要 |
 | @+URL 自动总结 | `@机器人 这篇文章主要说什么 https://example.com/article` | 自动进入总结 |
 | SSRF 拒绝 | `/总结 http://127.0.0.1:8080` | "该地址不被允许访问" |
-| 运行状态 | `/status` | 模型、会话数等（不含密钥） |
+| 运行状态 | `/status` | 普通用户查看基础可用性；管理员额外查看依赖、任务数、监控数、记忆数和最近错误 |
 | 主动发送（管理员私聊机器人） | `/broadcast user:123456 -- 你好` | 预览 → `/confirm` → 发送并汇报统计 |
 | 定时群发（管理员） | `/schedule group:456789 cron:0 8 * * * -- 大家早上好` | 持久化任务，每天 08:00 自动发到指定群 |
 | 定时主题段子（管理员） | `/schedule joke group:456789 cron:0 12 * * * -- mobile` | 每天 12:00 生成不同的 mobile 主题段子并发送 |
+| 群聊反馈开关（管理员） | `@机器人 /group-feedback off` | 关闭当前群普通成员的聊天和命令反馈；管理员仍可用 |
+| 查看群聊反馈状态（管理员） | `@机器人 /group-feedback status` | 查看当前群普通成员反馈是否开启 |
 | 权限拒绝 | 非管理员发 `/broadcast ...` | "该命令仅管理员可用。" |
 | 重复 /broadcast | 管理员连续两次 /broadcast | 只保留最新一条待确认，旧的自动作废 |
 | GitHub 监控 | `/github add https://github.com/owner/repo` | 添加仓库后可手动检查或接收变化通知 |
@@ -221,11 +224,11 @@ python scripts/send_message.py group:789012 "通知"
 ADMIN_QQ_IDS=111111,222222
 ```
 
-修改后重启 Bot。管理员专属能力：`/broadcast`、`/confirm`、`/cancel`。
+修改后重启 Bot。管理员专属能力：`/broadcast`、`/confirm`、`/cancel`、`/group-feedback`。
 
 ## 10. 安全设计说明
 
-- **SSRF**：所有抓取先用 `ipaddress` 做 scheme + DNS 解析后 IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），重定向每一跳重新校验，最多 5 跳，只允许 http/https，响应体有大小上限。已知限制：校验与请求之间存在 DNS rebinding 的理论窗口，生产环境可加自建解析 pin。
+- **SSRF**：普通 `WebFetcher` 对每一跳先做 scheme + DNS/IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），随后把 TCP 连接固定到本次已校验的公网 IP，同时保留原域名的 Host/SNI，从而关闭 DNS rebinding 的校验-连接窗口；最多 5 跳，只允许 http/https，禁止 URL userinfo，响应体有大小上限。可选 Playwright fallback 会对浏览器每个 HTTP(S) 请求重新做 SSRF 校验，但 Chromium 无法复用同一套 IP pinning，因此其 DNS rebinding 防护弱于默认 WebFetcher；对高安全部署建议保持 `ENABLE_PLAYWRIGHT=false`。
 - **Prompt Injection**：网页内容永远包在 `<untrusted_web_content>` 定界符内送入 LLM，system prompt 明确声明其中任何指令无效；总结链路代码中不存在 `MessageDispatcher` 引用，网页内容在架构上不可能触发 QQ 发送。
 - **发送权限**：`MessageDispatcher` 是唯一发送出口；核心聊天模型没有发送能力。自然语言 Agent 只能调用已注册的受限工具，管理员群发和定时群发仍需管理员权限及确认。
 - **Agent Harness**：LLM 只能返回白名单中的结构化工具名和参数；参数由业务代码再次校验。只读查询直接执行，记忆/通知/提醒/定时/清空/仓库变更/群发等写操作先写入 SQLite 待确认队列，确认后原子领取，避免重复执行。
@@ -244,7 +247,7 @@ ADMIN_QQ_IDS=111111,222222
 | 报 `401` / 鉴权失败 | token 不一致 |
 | 收不到群消息 / 无法 @ 响应 | NapCat 未上报群消息，检查 NapCat 日志；确认机器人未被禁言 |
 | AI 回复"服务暂时不可用" | 看 Bot 控制台 traceback：一般是 `LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL` 填错或欠费 |
-| 网页总结失败 | 目标站反爬（可开 `ENABLE_PLAYWRIGHT=true` 并 `pip install ".[playwright]"` + `playwright install chromium`，Bot 会自动降级用 Playwright 重试） |
+| 网页总结失败 | 目标站反爬（可开 `ENABLE_PLAYWRIGHT=true` 并 `pip install ".[playwright]"` + `playwright install chromium`，Bot 会自动降级用 Playwright 重试；浏览器 fallback 的 SSRF 防护弱于默认 IP-pinned WebFetcher，仅在确有需要时开启） |
 | `pip install trafilatura` 失败 | 先升级 pip：`pip install -U pip`，确保有预编译 lxml wheel |
 
 ## 12. Windows 部署

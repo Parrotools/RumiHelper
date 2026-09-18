@@ -1,5 +1,6 @@
 """基于 APScheduler 的持久化任务调度。"""
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -123,6 +124,7 @@ class SchedulerService:
         self._notifications = NotificationSettingsService(db)
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._started = False
+        self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
             GROUP_MESSAGE_TASK_TYPE: self._handle_group_message,
@@ -144,15 +146,29 @@ class SchedulerService:
         task = await self._db.fetch_scheduled_task_by_owner_type("__system__", task_type)
         cron_expression = cron_expression.strip()
         if not cron_expression:
-            if task is not None and task["enabled"]:
-                await self._db.update_scheduled_task_schedule(task["id"], None, None, False)
+            if task is not None:
+                if task["enabled"]:
+                    await self._db.update_scheduled_task_schedule(task["id"], None, None, False)
+                self._remove_job(task["id"])
             return
         if task is None:
             await self.create_task("__system__", task_type, {}, cron_expression=cron_expression)
             return
         if task["cron_expression"] != cron_expression or not task["enabled"]:
             next_run = self._next_cron_run(cron_expression)
-            await self._db.update_scheduled_task_schedule(task["id"], cron_expression, next_run.isoformat(), True)
+            await self._db.update_scheduled_task_schedule(
+                task["id"],
+                cron_expression,
+                next_run.isoformat(),
+                True,
+            )
+            if self._started:
+                updated = await self._db.fetch_scheduled_task(task["id"])
+                if updated is not None:
+                    self._schedule(updated)
+            return
+        if self._started and self._scheduler.get_job(self._job_id(task["id"])) is None:
+            self._schedule(task)
 
     async def start(self) -> None:
         if self._started:
@@ -167,6 +183,15 @@ class SchedulerService:
         if self._started:
             self._scheduler.shutdown(wait=False)
             self._started = False
+
+        current = asyncio.current_task()
+        active = [
+            task
+            for task in self._active_runs
+            if task is not current and not task.done()
+        ]
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)
 
     async def create_reminder(
         self,
@@ -268,32 +293,48 @@ class SchedulerService:
         return task_id
 
     async def run_task(self, task_id: int) -> None:
-        task = await self._db.fetch_scheduled_task(task_id)
-        if task is None or not task["enabled"]:
-            return
-
+        current = asyncio.current_task()
+        if current is not None:
+            self._active_runs.add(current)
         try:
-            notification_field = NOTIFICATION_BY_TASK.get(task["task_type"])
-            if notification_field:
-                settings = await self._notifications.get(task["owner_id"])
-                if not settings[notification_field]:
-                    logger.info("通知已关闭，跳过任务 task_id=%s type=%s", task_id, task["task_type"])
+            task = await self._db.fetch_scheduled_task(task_id)
+            if task is None or not task["enabled"]:
+                return
+
+            try:
+                notification_field = NOTIFICATION_BY_TASK.get(task["task_type"])
+                if notification_field:
+                    settings = await self._notifications.get(task["owner_id"])
+                    if not settings[notification_field]:
+                        logger.info("通知已关闭，跳过任务 task_id=%s type=%s", task_id, task["task_type"])
+                    else:
+                        await self._handlers[task["task_type"]](
+                            {**task, "payload": json.loads(task["payload"])}
+                        )
                 else:
                     await self._handlers[task["task_type"]](
                         {**task, "payload": json.loads(task["payload"])}
                     )
-            else:
-                await self._handlers[task["task_type"]]({**task, "payload": json.loads(task["payload"])})
-        except Exception:
-            logger.exception("定时任务执行失败 task_id=%s type=%s", task_id, task["task_type"])
+            except Exception:
+                logger.exception("定时任务执行失败 task_id=%s type=%s", task_id, task["task_type"])
+            finally:
+                # A task may be disabled or have its cron changed while its handler
+                # is still running. Re-read the row so this stale execution cannot
+                # overwrite a newer configuration in its completion bookkeeping.
+                latest = await self._db.fetch_scheduled_task(task_id)
+                if latest is not None:
+                    cron_expression = latest["cron_expression"] if latest["enabled"] else None
+                    next_run = self._next_cron_run(cron_expression) if cron_expression else None
+                    enabled = bool(cron_expression)
+                    await self._db.mark_scheduled_task_run(
+                        task_id,
+                        datetime.now(UTC).isoformat(),
+                        next_run.isoformat() if next_run else None,
+                        enabled,
+                    )
         finally:
-            next_run = None
-            enabled = bool(task["cron_expression"])
-            if enabled:
-                next_run = self._next_cron_run(task["cron_expression"])
-            await self._db.mark_scheduled_task_run(
-                task_id, datetime.now(UTC).isoformat(), next_run.isoformat() if next_run else None, enabled
-            )
+            if current is not None:
+                self._active_runs.discard(current)
 
     async def _handle_reminder(self, task: dict) -> None:
         payload = task["payload"]
@@ -358,6 +399,17 @@ class SchedulerService:
         await self._dispatcher.enqueue_group(target_id, content)
         await self._db.insert_scheduled_content_history(task["id"], content)
 
+    @staticmethod
+    def _job_id(task_id: int) -> str:
+        return f"scheduled-task-{task_id}"
+
+    def _remove_job(self, task_id: int) -> None:
+        if not self._started:
+            return
+        job_id = self._job_id(task_id)
+        if self._scheduler.get_job(job_id) is not None:
+            self._scheduler.remove_job(job_id)
+
     def _schedule(self, task: dict) -> bool:
         if task["cron_expression"]:
             trigger = CronTrigger.from_crontab(task["cron_expression"], timezone=self._timezone)
@@ -370,7 +422,7 @@ class SchedulerService:
             self.run_task,
             trigger=trigger,
             args=[task["id"]],
-            id=f"scheduled-task-{task['id']}",
+            id=self._job_id(task["id"]),
             replace_existing=True,
             coalesce=True,
             max_instances=1,

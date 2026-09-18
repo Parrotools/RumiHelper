@@ -1,5 +1,7 @@
 """pending_broadcast 生命周期测试：TTL 过期、管理员隔离、防重复执行。"""
 
+import asyncio
+
 import pytest
 
 from app.database.db import Database
@@ -56,3 +58,22 @@ async def test_cancel(db):
     pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
     assert await db.finish_pending(pid, "cancelled") is True
     assert await db.get_active_pending("admin1") is None
+
+
+async def test_concurrent_replacement_leaves_only_one_active(db):
+    async def create(content: str) -> int:
+        return await db.create_pending_broadcast(
+            "admin1",
+            [{"type": "user", "id": content}],
+            content,
+            ttl_seconds=300,
+        )
+
+    await asyncio.gather(create("first"), create("second"))
+
+    rows = await db.fetchall(
+        "SELECT content, status FROM pending_broadcasts ORDER BY id",
+        (),
+    )
+    assert [row["status"] for row in rows].count("active") == 1
+    assert [row["status"] for row in rows].count("cancelled") == 1

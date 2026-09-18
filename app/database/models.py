@@ -149,6 +149,14 @@ CREATE TABLE IF NOT EXISTS github_digest_targets (
 );
 """
 
+GROUP_FEEDBACK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS group_feedback_settings (
+    group_id        TEXT PRIMARY KEY,
+    feedback_enabled INTEGER NOT NULL DEFAULT 1 CHECK(feedback_enabled IN (0, 1)),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 SCHEDULED_CONTENT_HISTORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS scheduled_content_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,6 +167,14 @@ CREATE TABLE IF NOT EXISTS scheduled_content_history (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_content_history_task
     ON scheduled_content_history(task_id, id DESC);
+"""
+
+OUTBOUND_CONTROL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS outbound_control (
+    id           INTEGER PRIMARY KEY CHECK(id = 1),
+    paused_until TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'
+);
+INSERT OR IGNORE INTO outbound_control (id) VALUES (1);
 """
 
 AGENT_ACTION_SCHEMA = """
@@ -184,4 +200,6 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (3, GITHUB_DIGEST_SCHEMA),
     (4, SCHEDULED_CONTENT_HISTORY_SCHEMA),
     (5, AGENT_ACTION_SCHEMA),
+    (6, GROUP_FEEDBACK_SCHEMA),
+    (7, OUTBOUND_CONTROL_SCHEMA),
 )

@@ -1,3 +1,5 @@
+import asyncio
+import sqlite3
 from datetime import UTC
 
 import httpx
@@ -290,3 +292,70 @@ def test_parse_github_command():
         "set",
         [{"target_type": "user", "target_id": "123"}, {"target_type": "group", "target_id": "456"}],
     )
+
+
+async def test_replace_digest_targets_rolls_back_on_invalid_target(db):
+    await db.replace_github_digest_targets(
+        [{"target_type": "user", "target_id": "123"}]
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await db.replace_github_digest_targets(
+            [{"target_type": "invalid", "target_id": "999"}]
+        )
+
+    assert await db.fetch_github_digest_targets() == [
+        {"target_type": "user", "target_id": "123"}
+    ]
+
+
+async def test_delete_repository_rolls_back_all_related_rows_on_failure(db):
+    tracker = GitHubTracker(db, FakeGitHubClient(_snapshot("first")))
+    repo = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+    await tracker.watch("user-1", repo["repo_url"], "user:999")
+    await tracker.check("user-1", repo["repo_url"])
+
+    await db.execute(
+        "CREATE TRIGGER prevent_repo_delete BEFORE DELETE ON github_repositories "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await db.delete_github_repository("user-1", "OpenAI", "openai-python")
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_repositories",
+        (),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_snapshots",
+        (),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_notifications",
+        (),
+    ) == {"count": 1}
+
+
+async def test_concurrent_checks_of_same_repo_use_latest_snapshot(db):
+    client = FakeGitHubClient(_snapshot("baseline", stars=1))
+    tracker = GitHubTracker(db, client)
+    repo = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+    await tracker.check("user-1", repo["repo_url"])
+
+    client.snapshot = _snapshot("updated", stars=2)
+    first, second = await asyncio.gather(
+        tracker.check("user-1", repo["repo_url"]),
+        tracker.check("user-1", repo["repo_url"]),
+    )
+
+    changed = [bool(result["changes"]) for result in (first, second)]
+    assert changed.count(True) == 1
+    assert changed.count(False) == 1

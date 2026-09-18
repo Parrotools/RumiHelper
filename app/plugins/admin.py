@@ -6,6 +6,7 @@ from nonebot.matcher import Matcher
 from nonebot.rule import Rule
 
 from app.plugins.ai_chat import claim_message_id, command_is_addressed, strip_bot_mention
+from app.services.health import format_status
 from app.services.runtime import get_runtime
 from app.utils import send_local_reply
 
@@ -27,15 +28,11 @@ status_matcher = on_message(rule=Rule(_status_trigger), priority=5, block=True)
 async def _handle(event: MessageEvent, matcher_: Matcher):
     runtime = get_runtime()
     status = await runtime.health.check()
-    counts = status["counts"]
-    errors = status["recent_errors"]
-    await send_local_reply(matcher_, runtime,
-        "qq-llm-bot 运行状态：\n"
-        f"运行时间：{status['uptime_seconds']} 秒\n"
-        f"LLM：{'正常' if status['llm']['ok'] else '异常'}\n"
-        f"数据库：{'正常' if status['database']['ok'] else '异常'}\n"
-        f"Scheduler：{'运行中' if status['scheduler']['running'] else '未运行'}（{status['scheduler']['jobs']} 个任务）\n"
-        f"GitHub 监控：{counts.get('github_repositories', 0)}\n"
-        f"Memory：{counts.get('memories', 0)}\n"
-        f"最近错误：{errors[0]['error'] if errors else '无'}"
+    await send_local_reply(
+        matcher_,
+        runtime,
+        format_status(
+            status,
+            detailed=runtime.permission.is_admin(str(event.user_id)),
+        ),
     )

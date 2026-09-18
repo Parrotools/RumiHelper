@@ -42,6 +42,8 @@ def validate_url(url: str) -> httpx.URL:
         raise SSRFBlockedError(f"不允许的协议：{parsed.scheme or '(空)'}，只支持 http/https")
     if not parsed.host:
         raise SSRFBlockedError("URL 缺少主机名")
+    if parsed.userinfo:
+        raise SSRFBlockedError("URL 不允许包含用户名或密码")
     return parsed
 
 
@@ -60,11 +62,19 @@ def check_ips(ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address]) -> None:
             raise SSRFBlockedError(f"目标解析到被禁止的地址：{ip}")
 
 
-async def assert_url_safe(url: str) -> httpx.URL:
-    """scheme 校验 + DNS 解析 + IP 校验。抓取每一跳前都必须调用。"""
+async def resolve_url_safe(
+    url: str,
+) -> tuple[httpx.URL, list[ipaddress.IPv4Address | ipaddress.IPv6Address]]:
+    """返回已完成 scheme/DNS/IP 校验的 URL 和解析结果。"""
     parsed = validate_url(url)
     ips = await resolve_host(parsed.host)
     if not ips:
         raise SSRFBlockedError(f"域名没有任何解析结果：{parsed.host}")
     check_ips(ips)
+    return parsed, ips
+
+
+async def assert_url_safe(url: str) -> httpx.URL:
+    """scheme 校验 + DNS 解析 + IP 校验。抓取每一跳前都必须调用。"""
+    parsed, _ips = await resolve_url_safe(url)
     return parsed

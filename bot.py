@@ -37,12 +37,31 @@ driver.on_startup(_startup)
 driver.on_shutdown(_shutdown)
 
 
-@driver.server_app.get("/healthz")
-async def healthz():
+@driver.server_app.get("/livez")
+async def livez():
+    """进程级存活检查；不依赖任何外部服务。"""
+    return JSONResponse({"ok": True}, status_code=200)
+
+
+@driver.server_app.get("/readyz")
+async def readyz():
+    """核心就绪检查；QQ/GitHub 短暂异常不会让实例失去就绪状态。"""
     from app.services.runtime import get_runtime
 
     try:
-        result = await get_runtime().health.check()
+        result = await get_runtime().health.check_readiness()
+    except RuntimeError:
+        return JSONResponse({"ok": False, "detail": "starting"}, status_code=503)
+    return JSONResponse(result, status_code=200 if result["ok"] else 503)
+
+
+@driver.server_app.get("/healthz")
+async def healthz():
+    """完整业务健康检查，包括 QQ 与 GitHub 等外部依赖。"""
+    from app.services.runtime import get_runtime
+
+    try:
+        result = await get_runtime().health.check(include_diagnostics=False)
     except RuntimeError:
         return JSONResponse({"ok": False, "detail": "starting"}, status_code=503)
     return JSONResponse(result, status_code=200 if result["ok"] else 503)

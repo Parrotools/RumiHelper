@@ -94,3 +94,8 @@ async def test_assert_url_safe_public_ok(monkeypatch):
 def test_check_ips_raises():
     with pytest.raises(SSRFBlockedError):
         check_ips([ipaddress.ip_address("8.8.8.8"), ipaddress.ip_address("127.0.0.1")])
+
+
+def test_validate_url_rejects_userinfo_credentials():
+    with pytest.raises(SSRFBlockedError):
+        validate_url("https://user:password@example.com/private")

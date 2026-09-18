@@ -5,6 +5,7 @@ from nonebot.adapters.onebot.v11 import MessageEvent
 from nonebot.rule import Rule
 
 from app.plugins.ai_chat import claim_message_id, command_is_addressed, strip_bot_mention
+from app.security.permissions import notification_target_requires_admin
 from app.services.github.client import GitHubAPIError
 from app.services.github.tracker import GitHubTrackerError, format_check_result, parse_repo_url
 from app.services.qq.broadcast_parser import BroadcastFormatError, parse_targets
@@ -108,11 +109,21 @@ async def _handle_github(event: MessageEvent):
         elif command == "watch":
             if len(args) != 2:
                 raise GitHubTrackerError(_HELP)
-            target_type = args[1].partition(":")[0]
-            if target_type == "group" and not runtime.permission.is_admin(str(event.user_id)):
-                await send_local_reply(github_matcher, runtime, "群通知仅管理员可配置。")
+            sender_id = str(event.user_id)
+            target_type, separator, target_id = args[1].partition(":")
+            if not separator or target_type not in {"user", "group"} or not target_id.isdigit():
+                raise GitHubTrackerError("通知目标应为 user:QQ号 或 group:群号")
+            if (
+                notification_target_requires_admin(sender_id, target_type, target_id)
+                and not runtime.permission.is_admin(sender_id)
+            ):
+                await send_local_reply(
+                    github_matcher,
+                    runtime,
+                    "普通用户只能把 GitHub 通知发送给自己的私聊；其他用户或群聊目标仅管理员可配置。",
+                )
                 return
-            await runtime.github.watch(str(event.user_id), args[0], args[1])
+            await runtime.github.watch(sender_id, args[0], args[1])
             await send_local_reply(github_matcher, runtime, "GitHub 通知目标已添加。")
         elif command == "digest":
             if not runtime.permission.is_admin(str(event.user_id)):

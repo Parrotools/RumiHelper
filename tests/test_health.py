@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.database.db import Database
-from app.services.health import HealthService
+from app.services.health import HealthService, format_status
 
 
 @pytest.fixture
@@ -60,3 +60,137 @@ async def test_health_isolates_dependency_failure(db):
 
     assert result["database"]["ok"] is True
     assert result["llm"] == {"ok": False, "detail": "RuntimeError"}
+
+
+@pytest.mark.parametrize("response", [
+    {"online": False, "good": False}, {}, None,
+    {"online": "true", "good": True}, {"online": True},
+])
+async def test_health_can_probe_qq_status(db, monkeypatch, response):
+    class FakeBot:
+        async def call_api(self, action):
+            assert action == "get_status"
+            return response
+
+    monkeypatch.setattr("nonebot.get_bots", lambda: {"bot": FakeBot()})
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=0),
+        started_at=0,
+        check_qq=True,
+    )
+
+    result = await health.check()
+
+    assert result["ok"] is False
+    assert result["qq"] == {"ok": False, "detail": "RuntimeError"}
+
+
+async def test_readiness_checks_only_core_dependencies(db):
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        FailedDependency(),
+        SimpleNamespace(is_running=True, job_count=3),
+        started_at=0,
+        check_qq=True,
+    )
+
+    result = await health.check_readiness()
+
+    assert result["ok"] is True
+    assert result["database"]["ok"] is True
+    assert result["llm"]["ok"] is True
+    assert result["scheduler"] == {"running": True, "jobs": 3}
+    assert "github" not in result
+    assert "qq" not in result
+
+
+async def test_readiness_requires_running_scheduler(db):
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=False, job_count=0),
+        started_at=0,
+    )
+
+    result = await health.check_readiness()
+
+    assert result["ok"] is False
+    assert result["scheduler"]["running"] is False
+
+
+async def test_full_health_fails_when_scheduler_is_stopped(db):
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=False, job_count=0),
+        started_at=0,
+    )
+
+    result = await health.check()
+
+    assert result["database"]["ok"] is True
+    assert result["llm"]["ok"] is True
+    assert result["github"]["ok"] is True
+    assert result["scheduler"]["running"] is False
+    assert result["ok"] is False
+
+
+def test_public_status_hides_operational_diagnostics():
+    status = {
+        "uptime_seconds": 42,
+        "database": {"ok": True},
+        "llm": {"ok": True},
+        "scheduler": {"running": True, "jobs": 7},
+        "counts": {"github_repositories": 9, "memories": 11},
+        "recent_errors": [{"error": "sensitive backend detail"}],
+    }
+
+    rendered = format_status(status, detailed=False)
+
+    assert "服务：正常" in rendered
+    assert "运行时间：42 秒" in rendered
+    assert "GitHub 监控" not in rendered
+    assert "Memory" not in rendered
+    assert "最近错误" not in rendered
+    assert "sensitive backend detail" not in rendered
+
+
+def test_admin_status_keeps_operational_diagnostics():
+    status = {
+        "uptime_seconds": 42,
+        "database": {"ok": True},
+        "llm": {"ok": True},
+        "scheduler": {"running": True, "jobs": 7},
+        "counts": {"github_repositories": 9, "memories": 11},
+        "recent_errors": [{"error": "send failed"}],
+    }
+
+    rendered = format_status(status, detailed=True)
+
+    assert "Scheduler：运行中（7 个任务）" in rendered
+    assert "GitHub 监控：9" in rendered
+    assert "Memory：11" in rendered
+    assert "最近错误：send failed" in rendered
+
+
+async def test_health_can_omit_operational_diagnostics(db):
+    await db.insert_send_log("user", "123", "内容", False, None, "secret-ish error")
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=2),
+        started_at=0,
+    )
+
+    result = await health.check(include_diagnostics=False)
+
+    assert result["ok"] is True
+    assert "counts" not in result
+    assert "recent_errors" not in result

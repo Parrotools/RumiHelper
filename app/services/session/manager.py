@@ -6,6 +6,11 @@ session key 规则：
 - 群聊（GROUP_SHARED_CONTEXT=true，全群共享）：group:{group_id}
 """
 
+import asyncio
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from app.database.db import Database
 
 
@@ -13,6 +18,16 @@ class SessionManager:
     def __init__(self, db: Database, max_context_messages: int = 20):
         self._db = db
         self._max = max(2, max_context_messages)
+        self._turn_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    @asynccontextmanager
+    async def turn(self, session_key: str) -> AsyncIterator[None]:
+        """Serialize one complete conversational turn per session."""
+        lock = self._turn_locks.setdefault(session_key, asyncio.Lock())
+        async with lock:
+            yield
 
     @staticmethod
     def private_key(user_id: str) -> str:
@@ -35,23 +50,62 @@ class SessionManager:
         return [{"role": r["role"], "content": r["content"]} for r in rows]
 
     async def append(self, session_key: str, role: str, content: str) -> None:
-        await self._db.execute(
-            "INSERT INTO messages (session_key, role, content) VALUES (?, ?, ?)",
-            (session_key, role, content),
-        )
-        await self._db.execute(
-            "INSERT INTO sessions (session_key) VALUES (?) "
-            "ON CONFLICT(session_key) DO UPDATE SET updated_at = datetime('now')",
-            (session_key,),
-        )
-        # 只保留最近 N 条，防止上下文无限增长
-        await self._db.execute(
-            "DELETE FROM messages WHERE session_key = ? AND id NOT IN ("
-            "  SELECT id FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
-            ")",
-            (session_key, session_key, self._max),
+        """Append one message and trim history atomically."""
+        await self._append_messages(session_key, [(role, content)])
+
+    async def append_turn(
+        self,
+        session_key: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        """Persist a complete user/assistant turn atomically."""
+        await self._append_messages(
+            session_key,
+            [("user", user_content), ("assistant", assistant_content)],
         )
 
+    async def _append_messages(
+        self,
+        session_key: str,
+        messages: list[tuple[str, str]],
+    ) -> None:
+        async with self._db.operation():
+            try:
+                await self._db.conn.executemany(
+                    "INSERT INTO messages (session_key, role, content) VALUES (?, ?, ?)",
+                    [(session_key, role, content) for role, content in messages],
+                )
+                await self._db.conn.execute(
+                    "INSERT INTO sessions (session_key) VALUES (?) "
+                    "ON CONFLICT(session_key) DO UPDATE SET updated_at = datetime('now')",
+                    (session_key,),
+                )
+                # 只保留最近 N 条，防止上下文无限增长
+                await self._db.conn.execute(
+                    "DELETE FROM messages WHERE session_key = ? AND id NOT IN ("
+                    "  SELECT id FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
+                    ")",
+                    (session_key, session_key, self._max),
+                )
+                await self._db.conn.commit()
+            except Exception:
+                await self._db.conn.rollback()
+                raise
+
     async def clear(self, session_key: str) -> None:
-        await self._db.execute("DELETE FROM messages WHERE session_key = ?", (session_key,))
-        await self._db.execute("DELETE FROM sessions WHERE session_key = ?", (session_key,))
+        """Delete session metadata and messages atomically."""
+        async with self._db.operation():
+            try:
+                await self._db.conn.execute(
+                    "DELETE FROM messages WHERE session_key = ?",
+                    (session_key,),
+                )
+                await self._db.conn.execute(
+                    "DELETE FROM sessions WHERE session_key = ?",
+                    (session_key,),
+                )
+                await self._db.conn.commit()
+            except Exception:
+                await self._db.conn.rollback()
+                raise

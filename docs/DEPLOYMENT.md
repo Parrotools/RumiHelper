@@ -50,21 +50,57 @@ NapCat 是客户端，Bot 是服务端。两者同机时使用 `ws://127.0.0.1:8
 | `DATABASE_PATH` | `data/bot.db` | SQLite 数据库路径 |
 | `GITHUB_CHECK_CRON` | `0 * * * *` | GitHub 检查频率；留空关闭 |
 | `DAILY_REPORT_CRON` | `0 23 * * *` | 日报时间；留空关闭 |
+| `SEND_RATE_LIMIT_PER_SECOND` | `1` | 主动消息发送速率 |
+| `INTERACTIVE_SEND_RATE_LIMIT_PER_SECOND` | `0.5` | 所有交互回复的统一发送速率 |
 | `OUTBOUND_MAX_ATTEMPTS` | `3` | 主动通知最大投递次数 |
 | `OUTBOUND_RETRY_DELAY_SECONDS` | `30` | 投递失败后的固定等待秒数 |
+| `OUTBOUND_ACCOUNT_PAUSE_SECONDS` | `1800` | 检测到账号掉线/登录态失效后暂停主动投递的秒数 |
+| `OUTBOUND_RATE_LIMIT_PAUSE_SECONDS` | `60` | 检测到接口限流后暂停主动投递的秒数 |
 | `OUTBOUND_QUEUE_POLL_SECONDS` | `1` | 队列空闲轮询秒数 |
 | `OUTBOUND_LEASE_SECONDS` | `60` | 进程异常后 `sending` 任务可被重新领取的秒数 |
 
-提醒、GitHub 变化和日报先写入 SQLite 队列，再由 Dispatcher 投递。进程重启不会丢失未完成投递；超过最大次数的记录会进入 `failed` 状态。
+提醒、GitHub 变化和日报先写入 SQLite 队列，再由 Dispatcher 投递。进程重启不会丢失未完成投递；超过最大次数的记录会进入 `failed` 状态。账号掉线或接口限流触发的全局投递熔断截止时间也保存在 SQLite 中，因此 Bot 重启不会绕过尚未结束的 cooldown。
 
 ## 健康检查、备份与升级
 
-- 访问 `GET /healthz`：200 表示数据库、LLM、GitHub API 均可用；503 表示至少一项失败。不要将该端点暴露到公网。
-- QQ 内发送 `/status` 可查看运行时间、依赖状态、任务数、监控数、记忆数和最近投递错误。
+- `GET /livez`：只表示 Bot 进程与 HTTP 事件循环仍存活，不探测任何外部依赖；适合作为 liveness probe。
+- `GET /readyz`：检查 SQLite、LLM 与 Scheduler；QQ 或 GitHub 短暂异常不会把实例判为未就绪，适合作为 readiness probe。
+- `GET /healthz`：完整业务健康检查，额外包含 GitHub 与 QQ/OneBot 状态，但不返回业务计数或原始错误字符串；用于运维观测，不要把 QQ 短暂掉线直接绑定为进程重启条件。不要将这些端点暴露到公网。
+- QQ 内发送 `/status`：普通用户只看到基础可用性和运行时间；Bot 管理员额外看到依赖状态、任务数、监控数、记忆数和最近投递错误。
 - 升级前先停止 Bot，并备份整个 `data/` 目录。SQLite 使用 WAL 时应同时备份 `bot.db`、`bot.db-wal`、`bot.db-shm`，或先正常停机后仅备份 `bot.db`。
-- 新版本启动时自动执行有序 migration。已有数据不会被删除；若启动失败，保留备份并查看 migration 相关日志，不要手改 `schema_migrations`。
+- 新版本启动时自动执行有序 migration；每个 migration 与对应 `schema_migrations` 版本标记在同一 SQLite 事务内，失败会整体回滚并关闭连接。已有数据不会被删除；若启动失败，保留备份并查看 migration 相关日志，不要手改 `schema_migrations`。
 
 ## 故障排查
+
+### NapCat 登录恢复（4.15.0 / 4.18.19）
+
+部署 `ops/napcat/napcat_watchdog.py` 到 `/usr/local/lib/qqbot/napcat_watchdog.py`，
+部署同目录的 `.sh` 到 `/usr/local/sbin/napcat-watchdog`，并安装 `.service` / `.timer`。
+修改 systemd 单元后执行 `systemctl daemon-reload`。守护服务从
+`/etc/napcat/napcat.env` 读取 `NAPCAT_QUICK_ACCOUNT` 和 `NAPCAT_QUICK_PASSWORD_MD5`；
+该文件必须由 root 持有、权限 600。NapCat 4.15.0 自身不读取这两个密码回退配置，
+由守护服务调用本机 WebUI 的现有密码登录接口。WebUI token 从 NapCat 原有配置读取，
+不写入日志、命令行或 Git。升级到 4.18.19 后，将 `ops/napcat/controlled-login.conf`
+安装为 `/etc/systemd/system/napcat.service.d/controlled-login.conf`，避免 NapCat 自身和守护程序
+各尝试一次密码登录。密码仅由守护程序的 EnvironmentFile 加载；WebUI 的人工密码登录照常可用。
+4.15.0 不支持验证码提交；4.18.19 支持验证码/新设备验证流程。版本升级不等于消除平台掉线风险。
+
+- WebUI 同时报告登录成功、QQ 在线才视为登录恢复。`get_status` 只表示 QQ 客户端报告的在线状态，不能保证消息端到端送达。
+- 启动后先等待 120 秒让快速登录完成；登录态失效时，每次故障最多调用一次密码登录，且 24 小时最多一次。
+- 验证码、账号限制、密码错误或登录请求超时后等待人工处理，保留 WebUI；不会停止 NapCat，也不会无限重试。
+- 确认离线持续 5 分钟才允许恢复重启；重启间隔指数增长，24 小时最多 3 次。探测超时不触发重启，已停止的服务不会擅自启动。
+- 状态和重试预算持久化在 `/var/lib/napcat-watchdog/state.json`，状态变化记录在 `journalctl -u napcat-watchdog.service`。旧日志和旧的 `manual-auth-required` 标记不会反复覆盖新的在线状态。
+
+需要明确恢复一个已停止的实例时，可运行一次（已有凭据仍由 systemd 加载）：
+
+```bash
+systemd-run --collect --property=Type=oneshot \
+  --property=EnvironmentFile=/etc/napcat/napcat.env \
+  /usr/local/sbin/napcat-watchdog --recover
+```
+
+`--recover` 不重置当天重试预算。平台是否再次撤销登录态仍须通过运行记录和真实收发验收，
+守护脚本不能保证账号永不被踢下线。
 
 | 现象 | 排查方式 |
 |---|---|
@@ -72,5 +108,5 @@ NapCat 是客户端，Bot 是服务端。两者同机时使用 `ws://127.0.0.1:8
 | `/healthz` 的 LLM 为异常 | 检查 `LLM_BASE_URL`、API Key、模型权限和出网；错误详情只看部署日志 |
 | GitHub 为异常 | 检查出网、`GITHUB_TOKEN` 与 API 限额；无 token 时限额较低 |
 | 主动通知未送达 | 用 `/status` 查看最近错误；检查 `outbound_messages` 中 `status/attempts/last_error`，确认 NapCat 已连接 |
-| 定时任务不运行 | 核对时区与 cron，重启后用 `/status` 确认 Scheduler 运行中及任务数 |
+| 定时任务不运行 | 核对时区与 cron，用 `/status` 确认 Scheduler 运行中及任务数；system cron 修改会即时重排 APScheduler job，无需仅为 cron 变更重启 Bot |
 | 数据库锁定 | 确认只运行一个 Bot 进程；正常停止残留进程后恢复，禁止多个实例共用同一 SQLite 文件 |

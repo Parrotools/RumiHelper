@@ -69,11 +69,15 @@ class OpenAICompatibleProvider(LLMProvider):
 
     async def check_health(self) -> None:
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        try:
-            response = await self._client.get(f"{self._base_url}/models", headers=headers)
-        except httpx.TimeoutException as e:
-            raise LLMTimeoutError("LLM 请求超时") from e
-        except httpx.HTTPError as e:
-            raise LLMError(f"LLM 请求失败：{type(e).__name__}") from e
+        async with self._semaphore:
+            try:
+                response = await self._client.get(
+                    f"{self._base_url}/models",
+                    headers=headers,
+                )
+            except httpx.TimeoutException as e:
+                raise LLMTimeoutError("LLM 请求超时") from e
+            except httpx.HTTPError as e:
+                raise LLMError(f"LLM 请求失败：{type(e).__name__}") from e
         if response.status_code >= 400:
             raise LLMHTTPError(response.status_code)

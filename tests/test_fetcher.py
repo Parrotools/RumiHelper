@@ -1,5 +1,6 @@
 """Fetcher 测试：内容类型白名单、大小上限、redirect 逐跳 SSRF 校验。"""
 
+import asyncio
 import sys
 from types import ModuleType
 
@@ -70,7 +71,7 @@ async def test_redirect_revalidates_ssrf_each_hop(monkeypatch):
     monkeypatch.setattr(ssrf, "resolve_host", fake_resolve)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "example.com":
+        if request.headers.get("host") == "example.com":
             return _resp(302, b"", {"location": "http://internal.example/x"}, request)
         return _resp(200, HTML, {"content-type": "text/html"}, request)
 
@@ -101,19 +102,53 @@ async def test_too_many_redirects(monkeypatch):
     await f.aclose()
 
 
-async def test_playwright_revalidates_final_redirect_url(monkeypatch):
+async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
+    class FakeRequest:
+        def __init__(self, url: str):
+            self.url = url
+
+    class FakeRoute:
+        def __init__(self):
+            self.aborted = False
+            self.continued = False
+
+        async def abort(self):
+            self.aborted = True
+
+        async def continue_(self):
+            self.continued = True
+
     class FakePage:
-        url = "http://127.0.0.1/internal"
+        url = "https://example.com/page"
+
+        def __init__(self):
+            self.handler = None
+            self.internal_route = None
+
+        async def route(self, _pattern, handler):
+            self.handler = handler
 
         async def goto(self, *args, **kwargs):
-            return None
+            public_route = FakeRoute()
+            await self.handler(public_route, FakeRequest("https://example.com/page"))
+            assert public_route.continued is True
+
+            self.internal_route = FakeRoute()
+            await self.handler(
+                self.internal_route,
+                FakeRequest("http://127.0.0.1/internal"),
+            )
+            assert self.internal_route.aborted is True
+            raise RuntimeError("navigation blocked")
 
         async def content(self):
-            return "<html></html>"
+            raise AssertionError("blocked redirect must not reach page.content()")
+
+    page = FakePage()
 
     class FakeBrowser:
         async def new_page(self, **kwargs):
-            return FakePage()
+            return page
 
         async def close(self):
             return None
@@ -151,7 +186,8 @@ async def test_playwright_revalidates_final_redirect_url(monkeypatch):
 
     with pytest.raises(SSRFBlockedError):
         await PlaywrightFetcher().fetch("https://example.com/page")
-    assert checked == ["https://example.com/page", "http://127.0.0.1/internal"]
+    assert checked[-1] == "http://127.0.0.1/internal"
+    assert page.internal_route is not None and page.internal_route.aborted is True
 
 
 async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
@@ -162,6 +198,9 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
         pass
 
     class FakePage:
+        async def route(self, *args, **kwargs):
+            return None
+
         async def goto(self, *args, **kwargs):
             raise FakePlaywrightTimeoutError("navigation timed out")
 
@@ -198,3 +237,74 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
 
     with pytest.raises(FetchTimeoutError, match="navigation timed out"):
         await PlaywrightFetcher().fetch("https://example.com/page")
+
+
+async def test_concurrent_same_url_shares_one_inflight_request(monkeypatch):
+    from app.security import ssrf
+
+    async def fake_resolve(_host: str):
+        return [__import__("ipaddress").ip_address("93.184.216.34")]
+
+    monkeypatch.setattr(ssrf, "resolve_host", fake_resolve)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _resp(
+            200,
+            HTML,
+            {"content-type": "text/html; charset=utf-8"},
+            request,
+        )
+
+    fetcher = WebFetcher(
+        cache_ttl=0,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        first, second = await asyncio.gather(
+            fetcher.fetch("https://example.com/shared"),
+            fetcher.fetch("https://example.com/shared"),
+        )
+    finally:
+        await fetcher.aclose()
+
+    assert calls == 1
+    assert first.text == second.text
+
+
+async def test_fetch_pins_connection_to_validated_ip_and_keeps_host_sni(monkeypatch):
+    import ipaddress
+
+    from app.security import ssrf
+
+    async def fake_resolve(_host: str):
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    monkeypatch.setattr(ssrf, "resolve_host", fake_resolve)
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url_host"] = request.url.host
+        captured["host_header"] = request.headers.get("host")
+        captured["sni"] = request.extensions.get("sni_hostname")
+        return _resp(
+            200,
+            HTML,
+            {"content-type": "text/html; charset=utf-8"},
+            request,
+        )
+
+    fetcher = WebFetcher(transport=httpx.MockTransport(handler))
+    try:
+        result = await fetcher.fetch("https://example.com/path")
+    finally:
+        await fetcher.aclose()
+
+    assert result.final_url == "https://example.com/path"
+    assert captured == {
+        "url_host": "93.184.216.34",
+        "host_header": "example.com",
+        "sni": "example.com",
+    }
