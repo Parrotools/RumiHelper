@@ -233,6 +233,14 @@ async def _handle(event: MessageEvent):
             logger.exception("LLM 调用失败 session=%s", session_key)
             await send_reply(matcher, runtime, "AI 服务暂时不可用，请稍后再试。")
             return
+        except Exception as exc:  # noqa: BLE001 - provider bugs must not escape the chat handler
+            logger.error(
+                "LLM 非预期失败 session=%s error=%s",
+                session_key,
+                type(exc).__name__,
+            )
+            await send_reply(matcher, runtime, "AI 服务暂时不可用，请稍后再试。")
+            return
 
         # 成功后才落库，失败轮次不污染上下文
         await _append_turn(runtime.sessions, session_key, prompt_text, reply)

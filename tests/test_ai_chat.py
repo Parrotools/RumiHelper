@@ -169,3 +169,79 @@ async def test_reply_context_fetch_failure_does_not_block_chat(monkeypatch):
     ]
     assert "secret-token" not in repr(logged)
     assert "/private/internal" not in repr(logged)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_llm_failure_is_redacted_and_does_not_persist_turn(monkeypatch):
+    sent: list[str] = []
+    appended: list[tuple[str, str, str]] = []
+    logged: list[tuple[str, tuple]] = []
+
+    class FakeSessions:
+        async def get_context(self, session_key: str) -> list[dict]:
+            return []
+
+        async def append_turn(
+            self,
+            session_key: str,
+            user_text: str,
+            assistant_text: str,
+        ) -> None:
+            appended.append((session_key, user_text, assistant_text))
+
+    class CrashingLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            del messages, kwargs
+            raise RuntimeError("secret-token=abc123 path=/private/provider")
+
+    runtime = SimpleNamespace(
+        sessions=FakeSessions(),
+        llm=CrashingLLM(),
+        agent=None,
+        settings=SimpleNamespace(
+            agent_tool_calling_enabled=False,
+            group_shared_context=False,
+        ),
+    )
+
+    async def fake_memory_context(_runtime, _event) -> str:
+        return ""
+
+    async def fake_reply_context(_event, text: str) -> str:
+        return text
+
+    async def fake_send_reply(_matcher, _runtime, message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(ai_chat, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(ai_chat, "_owner_identity_reply", lambda *_args: None)
+    monkeypatch.setattr(ai_chat, "_memory_context_for_event", fake_memory_context)
+    monkeypatch.setattr(ai_chat, "_with_reply_context", fake_reply_context)
+    monkeypatch.setattr(
+        ai_chat,
+        "_build_chat_messages",
+        lambda *_args, **_kwargs: (
+            [{"role": "user", "content": "hello"}],
+            SimpleNamespace(mode="normal"),
+        ),
+    )
+    monkeypatch.setattr(ai_chat, "_temperature", lambda *_args: 0.0)
+    monkeypatch.setattr(ai_chat, "send_reply", fake_send_reply)
+    monkeypatch.setattr(
+        ai_chat.logger,
+        "error",
+        lambda message, *args: logged.append((message, args)),
+    )
+
+    await ai_chat._handle(_private_event(Message("hello")))
+
+    assert sent == ["AI 服务暂时不可用，请稍后再试。"]
+    assert appended == []
+    assert logged == [
+        (
+            "LLM 非预期失败 session=%s error=%s",
+            ("private:20000", "RuntimeError"),
+        )
+    ]
+    assert "secret-token" not in repr(logged)
+    assert "/private/provider" not in repr(logged)
