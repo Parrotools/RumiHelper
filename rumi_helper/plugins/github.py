@@ -37,7 +37,11 @@ def parse_github_command(text: str) -> tuple[str, list[str]]:
     return parts[1].lower(), parts[2:]
 
 
-def parse_github_digest_command(args: list[str]) -> tuple[str, list[dict]]:
+def parse_github_digest_command(
+    args: list[str],
+    *,
+    max_targets: int | None = None,
+) -> tuple[str, list[dict]]:
     """解析定时汇总目标命令；set 省略时也允许直接跟目标列表。"""
     if not args:
         raise GitHubTrackerError(_HELP)
@@ -51,6 +55,10 @@ def parse_github_digest_command(args: list[str]) -> tuple[str, list[dict]]:
         targets = parse_targets(raw_targets)
     except BroadcastFormatError as e:
         raise GitHubTrackerError(str(e)) from e
+    if max_targets is not None and len(targets) > max(0, int(max_targets)):
+        raise GitHubTrackerError(
+            f"目标数量 {len(targets)} 超过上限 {max_targets}"
+        )
     return "set", [{"target_type": target.type, "target_id": target.id} for target in targets]
 
 
@@ -133,7 +141,10 @@ async def _handle_github(event: MessageEvent):
             if not runtime.permission.is_admin(str(event.user_id)):
                 await send_local_reply(github_matcher, runtime, "该命令仅管理员可用。")
                 return
-            action, targets = parse_github_digest_command(args)
+            action, targets = parse_github_digest_command(
+                args,
+                max_targets=runtime.settings.max_broadcast_recipients,
+            )
             if action == "list":
                 configured = await runtime.db.fetch_github_digest_targets()
                 if not configured:

@@ -422,6 +422,11 @@ def test_parse_github_command():
         "set",
         [{"target_type": "user", "target_id": "123"}, {"target_type": "group", "target_id": "456"}],
     )
+    with pytest.raises(GitHubTrackerError, match="超过上限"):
+        parse_github_digest_command(
+            ["set", "user:1,user:2,user:3"],
+            max_targets=2,
+        )
 
 
 async def test_replace_digest_targets_rolls_back_on_invalid_target(db):

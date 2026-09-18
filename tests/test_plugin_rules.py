@@ -240,6 +240,9 @@ async def test_broadcast_rule_matches_command():
 async def test_broadcast_rule_rejects_other_text():
     assert await broadcast_plugin._broadcast_rule(_private_event("broadcast user:123", mid=302)) is False
     assert await broadcast_plugin._broadcast_rule(_private_event("/confirm", mid=303)) is False
+    assert await broadcast_plugin._broadcast_rule(
+        _private_event("/broadcasting user:123 -- hello", mid=307)
+    ) is False
 
 
 async def test_confirm_and_cancel_rules():

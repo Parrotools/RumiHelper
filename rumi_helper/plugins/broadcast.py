@@ -31,8 +31,8 @@ async def _broadcast_rule(event: MessageEvent) -> bool:
         return False
     if not command_is_addressed(event):
         return False
-    text = strip_bot_mention(event.message.extract_plain_text())
-    if text.lower().startswith(_BROADCAST):
+    text = strip_bot_mention(event.message.extract_plain_text()).lower()
+    if text == _BROADCAST or text.startswith(f"{_BROADCAST} "):
         return claim_event(event)
     return False
 
