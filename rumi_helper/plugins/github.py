@@ -1,7 +1,7 @@
 """GitHub 仓库登记、手动检查和通知目标管理。"""
 
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import MessageEvent
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 from nonebot.rule import Rule
 
 from rumi_helper.plugins.chat_message_utils import (
@@ -81,6 +81,13 @@ async def _handle_github(event: MessageEvent):
     runtime = get_runtime()
     try:
         command, args = parse_github_command(strip_bot_mention(event.message.extract_plain_text()))
+        if isinstance(event, GroupMessageEvent) and command in {"list", "digest"}:
+            await send_local_reply(
+                github_matcher,
+                runtime,
+                "为了隐私，GitHub 监控配置只能在私聊中查看或修改。",
+            )
+            return
         if command == "add":
             if len(args) != 1:
                 raise GitHubTrackerError(_HELP)

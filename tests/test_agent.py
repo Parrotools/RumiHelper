@@ -691,3 +691,54 @@ async def test_recover_executing_agent_actions_only_fails_expired_executions(db)
         {"id": pending_id, "status": "pending"},
         {"id": fresh_id, "status": "executing"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_agent_private_github_configuration_is_blocked_before_group_confirmation(db):
+    target = "group:987654"
+    runtime = _runtime(
+        db,
+        FakeLLM(
+            '{"action":"github_digest_set","arguments":'
+            f'{{"targets":"{target}"}}}}'
+        ),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="admin", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="把 GitHub 定时汇总发到 group:987654",
+    )
+
+    assert result is not None and result.handled
+    assert result.message == "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+    assert target not in result.message
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM pending_agent_actions",
+        (),
+    ) == {"count": 0}
+
+
+@pytest.mark.asyncio
+async def test_agent_github_list_is_private_only(db):
+    github = FakeGitHub()
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"github_list_repositories","arguments":{}}'),
+        github,
+    )
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="user-1", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="看看我的 GitHub 仓库列表",
+    )
+
+    assert result is not None and result.handled
+    assert result.message == "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+    assert "OpenAI/openai-python" not in result.message

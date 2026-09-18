@@ -37,6 +37,14 @@ _AGENT_HINTS = (
     "发送", "日报", "状态", "清空", "重置会话", "段子", "主题", "消息",
 )
 _MAX_REQUEST_CHARS = 4000
+_PRIVATE_ONLY_MESSAGES = {
+    "memory_list": "操作失败：为了隐私，长期记忆只能在私聊中查看",
+    "daily_report": "操作失败：为了隐私，日报只能在私聊中查看",
+    "github_list_repositories": "为了隐私，GitHub 监控配置只能在私聊中查看或修改。",
+    "github_digest_set": "为了隐私，GitHub 监控配置只能在私聊中查看或修改。",
+    "github_digest_list": "为了隐私，GitHub 监控配置只能在私聊中查看或修改。",
+    "github_digest_clear": "为了隐私，GitHub 监控配置只能在私聊中查看或修改。",
+}
 
 _SERVICE_ERRORS = (
     GitHubAPIError,
@@ -101,6 +109,8 @@ class AgentHarness:
 
         user_id = str(event.user_id)
         session_key = _session_key(event, runtime)
+        if session_key.startswith("group:") and tool.name in _PRIVATE_ONLY_MESSAGES:
+            return AgentResult(True, _PRIVATE_ONLY_MESSAGES[tool.name])
         if (
             needs_admin(tool, arguments, user_id, session_key)
             and not runtime.permission.is_admin(user_id)

@@ -394,3 +394,27 @@ async def test_admin_status_requests_operational_diagnostics(monkeypatch):
     await admin_plugin._handle(_private_event("/status", mid=405), SimpleNamespace())
 
     assert calls == [True]
+
+
+async def test_github_list_in_group_refuses_private_configuration(monkeypatch):
+    sent: list[str] = []
+
+    class FailIfQueriedGitHub:
+        async def list_repositories(self, user_id: str):
+            raise AssertionError(f"must not query private repo list for {user_id}")
+
+    runtime = SimpleNamespace(github=FailIfQueriedGitHub())
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(github_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(github_plugin, "send_local_reply", fake_send_local_reply)
+
+    await github_plugin._handle_github(
+        _group_event("/github list", at=True, mid=369)
+    )
+
+    assert sent == [
+        "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+    ]
