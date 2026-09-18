@@ -177,6 +177,21 @@ CREATE TABLE IF NOT EXISTS outbound_control (
 INSERT OR IGNORE INTO outbound_control (id) VALUES (1);
 """
 
+SYSTEM_TASK_UNIQUENESS_SCHEMA = """
+UPDATE scheduled_tasks
+SET enabled = 0, next_run = NULL
+WHERE owner_id = '__system__'
+  AND id NOT IN (
+      SELECT MAX(id)
+      FROM scheduled_tasks
+      WHERE owner_id = '__system__'
+      GROUP BY task_type
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_tasks_system_active_unique
+    ON scheduled_tasks(task_type)
+    WHERE owner_id = '__system__' AND enabled = 1;
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,4 +217,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (5, AGENT_ACTION_SCHEMA),
     (6, GROUP_FEEDBACK_SCHEMA),
     (7, OUTBOUND_CONTROL_SCHEMA),
+    (8, SYSTEM_TASK_UNIQUENESS_SCHEMA),
 )

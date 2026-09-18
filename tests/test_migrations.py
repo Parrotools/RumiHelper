@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7]
+        assert await upgraded.migration_versions() == [1, 2, 3, 4, 5, 6, 7, 8]
     finally:
         await upgraded.close()
 
@@ -137,3 +137,49 @@ async def test_failed_migration_rolls_back_and_connect_closes_connection(
             assert await cursor.fetchall() == []
     finally:
         await raw.close()
+
+
+async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_path):
+    path = str(tmp_path / "system-task-duplicates.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.execute(
+            "INSERT INTO scheduled_tasks "
+            "(owner_id, task_type, payload, cron_expression, next_run) "
+            "VALUES ('__system__', 'github_check', '{}', '0 * * * *', '2030-01-01T01:00:00+00:00')"
+        )
+        await legacy.execute(
+            "INSERT INTO scheduled_tasks "
+            "(owner_id, task_type, payload, cron_expression, next_run) "
+            "VALUES ('__system__', 'github_check', '{}', '5 * * * *', '2030-01-01T02:00:00+00:00')"
+        )
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    database = Database(path)
+    await database.connect()
+    try:
+        rows = await database.fetchall(
+            "SELECT id, enabled, next_run FROM scheduled_tasks "
+            "WHERE owner_id = '__system__' AND task_type = 'github_check' "
+            "ORDER BY id",
+            (),
+        )
+        assert len(rows) == 2
+        assert rows[0]["enabled"] == 0
+        assert rows[0]["next_run"] is None
+        assert rows[1]["enabled"] == 1
+        assert rows[1]["next_run"] == "2030-01-01T02:00:00+00:00"
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await database.execute(
+                "INSERT INTO scheduled_tasks "
+                "(owner_id, task_type, payload, cron_expression, next_run) "
+                "VALUES ('__system__', 'github_check', '{}', '10 * * * *', "
+                "'2030-01-01T03:00:00+00:00')",
+                (),
+            )
+    finally:
+        await database.close()

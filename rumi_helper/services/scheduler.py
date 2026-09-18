@@ -87,7 +87,17 @@ class SchedulerService:
                 self._remove_job(task["id"])
             return
         if task is None:
-            await self.create_task("__system__", task_type, {}, cron_expression=cron_expression)
+            next_run = self._next_cron_run(cron_expression)
+            task_id = await self._db.ensure_system_scheduled_task(
+                task_type,
+                {},
+                cron_expression,
+                next_run.isoformat(),
+            )
+            if self._started:
+                created = await self._db.fetch_scheduled_task(task_id)
+                if created is not None:
+                    self._schedule(created)
             return
         if task["cron_expression"] != cron_expression or not task["enabled"]:
             next_run = self._next_cron_run(cron_expression)

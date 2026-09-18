@@ -678,3 +678,54 @@ async def test_stale_trigger_cannot_execute_future_database_occurrence(db):
     claimed = await db.fetch_scheduled_task(task_id)
     assert claimed["last_run"] is not None
     assert claimed["next_run"] != future.isoformat()
+
+
+async def test_concurrent_processes_create_only_one_active_system_task(tmp_path):
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierDatabase(Database):
+        def __init__(self, path: str):
+            super().__init__(path)
+            self._sync_first_system_fetch = True
+
+        async def fetch_scheduled_task_by_owner_type(self, owner_id: str, task_type: str):
+            nonlocal barrier_count
+            row = await super().fetch_scheduled_task_by_owner_type(owner_id, task_type)
+            if self._sync_first_system_fetch and owner_id == "__system__":
+                self._sync_first_system_fetch = False
+                barrier_count += 1
+                if barrier_count >= 2:
+                    barrier_ready.set()
+                await barrier_ready.wait()
+            return row
+
+    path = str(tmp_path / "system-task-race.db")
+    first_db = BarrierDatabase(path)
+    second_db = BarrierDatabase(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        async def handler(_task: dict) -> None:
+            return None
+
+        first = SchedulerService(first_db, FakeDispatcher(), timezone_name="UTC")
+        second = SchedulerService(second_db, FakeDispatcher(), timezone_name="UTC")
+        first.register_handler("github_check", handler)
+        second.register_handler("github_check", handler)
+
+        await asyncio.gather(
+            first.sync_system_task("github_check", "0 * * * *"),
+            second.sync_system_task("github_check", "0 * * * *"),
+        )
+
+        rows = await first_db.fetchall(
+            "SELECT id, enabled FROM scheduled_tasks "
+            "WHERE owner_id = '__system__' AND task_type = 'github_check'",
+            (),
+        )
+        assert len(rows) == 1
+        assert rows[0]["enabled"] == 1
+    finally:
+        await first_db.close()
+        await second_db.close()

@@ -23,6 +23,37 @@ class SchedulerRepository:
             await self.conn.commit()
             return int(cursor.lastrowid)
 
+    async def ensure_system_scheduled_task(
+        self,
+        task_type: str,
+        payload: dict,
+        cron_expression: str,
+        next_run: str,
+    ) -> int:
+        """Create the active system task once across concurrent Bot processes."""
+        async with self.operation():
+            await self.conn.execute(
+                "INSERT OR IGNORE INTO scheduled_tasks "
+                "(owner_id, task_type, payload, cron_expression, next_run) "
+                "VALUES ('__system__', ?, ?, ?, ?)",
+                (
+                    str(task_type),
+                    json.dumps(payload, ensure_ascii=False),
+                    str(cron_expression),
+                    str(next_run),
+                ),
+            )
+            await self.conn.commit()
+            row = await self.fetchone(
+                "SELECT id FROM scheduled_tasks "
+                "WHERE owner_id = '__system__' AND task_type = ? AND enabled = 1 "
+                "ORDER BY id DESC LIMIT 1",
+                (str(task_type),),
+            )
+            if row is None:
+                raise RuntimeError("系统定时任务创建失败")
+            return int(row["id"])
+
     async def fetch_enabled_scheduled_tasks(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id")
 
