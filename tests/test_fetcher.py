@@ -54,6 +54,21 @@ async def test_unknown_charset_falls_back_to_utf8_replacement():
     assert result.text == "中文正文"
 
 
+async def test_missing_content_type_is_rejected():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _resp(200, HTML, {}, request)
+
+    f = WebFetcher(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(
+            UnsupportedContentTypeError,
+            match="missing-content-type",
+        ):
+            await f.fetch("https://example.com/no-content-type")
+    finally:
+        await f.aclose()
+
+
 async def test_content_type_whitelist():
     def handler(request: httpx.Request) -> httpx.Response:
         return _resp(200, b"binary", {"content-type": "application/octet-stream"}, request)

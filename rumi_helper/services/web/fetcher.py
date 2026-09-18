@@ -221,8 +221,10 @@ class WebFetcher:
                             raise FetchHTTPError(status_code)
 
                         mime = content_type_full.split(";")[0].strip().lower()
-                        if mime and not _is_supported_content_type(mime):
-                            raise UnsupportedContentTypeError(mime)
+                        if not mime or not _is_supported_content_type(mime):
+                            raise UnsupportedContentTypeError(
+                                mime or "missing-content-type"
+                            )
 
                         declared = resp.headers.get("content-length")
                         if declared and declared.isdigit() and int(declared) > self._max_bytes:
