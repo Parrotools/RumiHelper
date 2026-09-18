@@ -10,7 +10,6 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -68,6 +67,7 @@ class MessageDispatcher:
         max_attempts: int = 3,
         queue_poll_seconds: float = 1.0,
         lease_seconds: float = 60.0,
+        shutdown_timeout_seconds: float = 10.0,
     ):
         self._db = db
         self._interval = 1.0 / rate_limit_per_second if rate_limit_per_second and rate_limit_per_second > 0 else 0.0
@@ -78,6 +78,8 @@ class MessageDispatcher:
         self._max_attempts = max(1, max_attempts)
         self._queue_poll_seconds = max(0.1, queue_poll_seconds)
         self._lease_seconds = max(1.0, lease_seconds)
+        self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
+        self._shutdown_cancel_grace_seconds = min(1.0, self._shutdown_timeout_seconds)
         self._queue_task: asyncio.Task | None = None
         self._queue_wakeup = asyncio.Event()
         self._paused_until = 0.0
@@ -121,12 +123,22 @@ class MessageDispatcher:
         self._stopping = True
         self._queue_wakeup.set()
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+            await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=self._shutdown_timeout_seconds,
+            )
         except TimeoutError:
             logger.warning("主动消息队列优雅关闭超时，取消 worker")
             task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+            _done, pending = await asyncio.wait(
+                {task},
+                timeout=self._shutdown_cancel_grace_seconds,
+            )
+            if pending:
+                logger.error(
+                    "主动消息 worker 未响应取消，继续关闭；任务可能在进程退出前仍短暂运行"
+                )
+                task.cancel()
         finally:
             self._queue_task = None
 

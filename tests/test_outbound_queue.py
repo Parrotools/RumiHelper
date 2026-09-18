@@ -193,6 +193,39 @@ async def test_stop_finishes_inflight_delivery_before_worker_exits(db):
     assert dispatcher._queue_task is None
 
 
+async def test_stop_is_bounded_when_api_swallows_first_cancel(db):
+    entered = asyncio.Event()
+    swallowed = asyncio.Event()
+
+    async def api_caller(action: str, **params) -> dict:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            swallowed.set()
+            await asyncio.Event().wait()
+        return {"message_id": 999}
+
+    dispatcher = MessageDispatcher(
+        db,
+        api_caller=api_caller,
+        queue_poll_seconds=0.1,
+        shutdown_timeout_seconds=0.1,
+    )
+    await dispatcher.start()
+    await dispatcher.enqueue_user("123", "stubborn")
+    worker = dispatcher._queue_task
+    assert worker is not None
+    await entered.wait()
+
+    await asyncio.wait_for(dispatcher.stop(), timeout=0.5)
+    assert swallowed.is_set()
+    assert dispatcher._queue_task is None
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+
+
 async def test_malformed_onebot_response_retries_instead_of_marking_sent(db):
     async def api_caller(action: str, **params):
         return {}
