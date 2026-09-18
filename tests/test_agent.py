@@ -215,7 +215,15 @@ async def test_mutating_tool_is_pending_until_confirmation(db):
 
 
 @pytest.mark.asyncio
-async def test_confirm_unexpected_handler_error_marks_failed_and_hides_internal_detail(db):
+async def test_confirm_unexpected_handler_error_marks_failed_and_hides_internal_detail(
+    db,
+    monkeypatch,
+):
+    logged: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "rumi_helper.services.agent.harness.logger.error",
+        lambda message, *args: logged.append((message, args)),
+    )
     runtime = _runtime(
         db,
         FakeLLM(
@@ -242,6 +250,10 @@ async def test_confirm_unexpected_handler_error_marks_failed_and_hides_internal_
         "SELECT status FROM pending_agent_actions ORDER BY id DESC LIMIT 1",
         (),
     ) == {"status": "failed"}
+    assert len(logged) == 1
+    assert logged[0][0] == "agent action unexpected failure id=%s tool=%s error=%s"
+    assert logged[0][1][1:] == ("memory_save", "RuntimeError")
+    assert "/secret/internal.db" not in repr(logged)
 
 
 @pytest.mark.asyncio
@@ -281,7 +293,12 @@ async def test_read_only_tool_runs_without_confirmation(db):
 
 
 @pytest.mark.asyncio
-async def test_read_only_unexpected_error_is_redacted(db):
+async def test_read_only_unexpected_error_is_redacted(db, monkeypatch):
+    logged: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "rumi_helper.services.agent.harness.logger.error",
+        lambda message, *args: logged.append((message, args)),
+    )
     runtime = _runtime(
         db,
         FakeLLM('{"action":"github_list_repositories","arguments":{}}'),
@@ -302,6 +319,13 @@ async def test_read_only_unexpected_error_is_redacted(db):
         "SELECT COUNT(*) AS count FROM pending_agent_actions",
         (),
     ) == {"count": 0}
+    assert logged == [
+        (
+            "agent read-only tool unexpected failure tool=%s error=%s",
+            ("github_list_repositories", "RuntimeError"),
+        )
+    ]
+    assert "/secret/github.db" not in repr(logged)
 
 
 @pytest.mark.asyncio

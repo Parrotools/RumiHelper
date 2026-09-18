@@ -122,8 +122,12 @@ class AgentHarness:
                 return AgentResult(True, await tool.handler(runtime, user_id, arguments, session_key))
             except _SERVICE_ERRORS as exc:
                 return AgentResult(True, f"操作失败：{exc}")
-            except Exception:
-                logger.exception("agent read-only tool unexpected failure tool=%s", tool.name)
+            except Exception as exc:  # noqa: BLE001 - tool bugs must not escape the Agent boundary
+                logger.error(
+                    "agent read-only tool unexpected failure tool=%s error=%s",
+                    tool.name,
+                    type(exc).__name__,
+                )
                 return AgentResult(True, "操作失败：内部错误，请稍后重试。")
 
         summary = summarize(tool.name, arguments)
@@ -206,12 +210,13 @@ class AgentHarness:
                 exc,
             )
             return f"执行失败：{exc}"
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - confirmed tool bugs must not strand execution state
             await runtime.db.finish_pending_agent_action(pending["id"], "failed")
-            logger.exception(
-                "agent action unexpected failure id=%s tool=%s",
+            logger.error(
+                "agent action unexpected failure id=%s tool=%s error=%s",
                 pending["id"],
                 tool.name,
+                type(exc).__name__,
             )
             return "执行失败：内部错误，请稍后重试。"
         await runtime.db.finish_pending_agent_action(pending["id"], "confirmed")
