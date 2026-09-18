@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from rumi_helper.database.db import Database
 from rumi_helper.services.qq.broadcast_parser import BroadcastTarget
+from rumi_helper.utils import truncate_for_qq
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,7 @@ class MessageDispatcher:
         self._queue_wakeup.set()
 
     async def _enqueue(self, target_type: str, target_id: str, message: str, max_attempts: int | None) -> int:
+        message = truncate_for_qq(str(message))
         remaining_pause = max(0.0, self._paused_until - time.monotonic())
         not_before = None
         if remaining_pause > 0:
@@ -227,6 +229,7 @@ class MessageDispatcher:
         return await self._send("group", str(group_id), message)
 
     async def _send(self, target_type: str, target_id: str, message: str) -> SendResult:
+        message = truncate_for_qq(str(message))
         if await self._remaining_pause_seconds() > 0:
             result = SendResult(target_type, target_id, False, error="主动发送已暂停，等待账号/API恢复")
             await self._log(result, message)

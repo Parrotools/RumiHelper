@@ -4,6 +4,7 @@ import pytest
 
 from rumi_helper.database.db import Database
 from rumi_helper.services.qq.dispatcher import MessageDispatcher
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
 
 
 @pytest.fixture
@@ -260,3 +261,19 @@ async def test_malformed_onebot_response_retries_instead_of_marking_sent(db):
     assert row["attempts"] == 1
     assert row["message_id"] is None
     assert row["last_error"] == "ValueError"
+
+
+async def test_enqueue_truncates_oversized_message_before_persistence(db):
+    dispatcher = MessageDispatcher(db)
+    message_id = await dispatcher.enqueue_user(
+        "123",
+        "x" * (QQ_TEXT_SAFE_LIMIT + 500),
+    )
+
+    row = await db.fetchone(
+        "SELECT content FROM outbound_messages WHERE id = ?",
+        (message_id,),
+    )
+    assert row is not None
+    assert len(row["content"]) <= QQ_TEXT_SAFE_LIMIT
+    assert "内容过长已截断" in row["content"]

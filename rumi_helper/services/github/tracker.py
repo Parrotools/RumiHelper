@@ -281,7 +281,7 @@ def format_check_result(result: dict) -> str:
         else:
             labels = {"stars": "Star", "forks": "Fork", "issues": "开放 Issue/PR"}
             lines.append(f'{labels[change["type"]]}：{change["from"]} → {change["to"]}')
-    return "\n".join(lines)
+    return truncate_for_qq("\n".join(lines))
 
 
 def format_github_digest(

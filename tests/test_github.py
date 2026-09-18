@@ -17,10 +17,12 @@ from rumi_helper.services.github.tracker import (
     GitHubTracker,
     GitHubTrackerError,
     compare_snapshots,
+    format_check_result,
     format_github_digest,
     parse_repo_url,
 )
 from rumi_helper.services.notifications import NotificationSettingsService
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
 
 
 @pytest.fixture
@@ -743,3 +745,25 @@ async def test_concurrent_processes_cannot_exceed_github_repository_limit(tmp_pa
     finally:
         await first_db.close()
         await second_db.close()
+
+
+def test_github_change_formatter_bounds_oversized_commit_message():
+    repo = {
+        "repo_owner": "OpenAI",
+        "repo_name": "openai-python",
+    }
+    rendered = format_check_result(
+        {
+            "repo": repo,
+            "changes": [
+                {
+                    "type": "commit",
+                    "message": "x" * (QQ_TEXT_SAFE_LIMIT * 2),
+                    "author": "alice",
+                }
+            ],
+        }
+    )
+
+    assert len(rendered) <= QQ_TEXT_SAFE_LIMIT
+    assert "内容过长已截断" in rendered

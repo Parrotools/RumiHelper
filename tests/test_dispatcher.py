@@ -7,6 +7,7 @@ import pytest
 from rumi_helper.database.db import Database
 from rumi_helper.services.qq.broadcast_parser import BroadcastTarget
 from rumi_helper.services.qq.dispatcher import MessageDispatcher
+from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
 
 
 @pytest.fixture
@@ -170,3 +171,27 @@ async def test_send_rejects_malformed_onebot_success_response(db, response):
     assert len(rows) == 1
     assert rows[0]["success"] == 0
     assert rows[0]["error"] == "ValueError"
+
+
+async def test_direct_send_truncates_oversized_message_at_dispatch_boundary(db):
+    seen: list[str] = []
+
+    async def caller(action: str, **params) -> dict:
+        seen.append(str(params["message"]))
+        return {"message_id": 1}
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+
+    result = await dispatcher.send_user(
+        "123",
+        "x" * (QQ_TEXT_SAFE_LIMIT + 500),
+    )
+
+    assert result.success is True
+    assert len(seen) == 1
+    assert len(seen[0]) <= QQ_TEXT_SAFE_LIMIT
+    assert "内容过长已截断" in seen[0]
