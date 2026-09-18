@@ -159,7 +159,31 @@ class AgentHarness:
                 and not runtime.permission.is_admin(user_id)
             ):
                 raise AgentArgumentError("当前账号已不再具备管理员权限")
-            result = await tool.handler(runtime, user_id, arguments, str(pending["session_key"]))
+            pending_session_key = str(pending["session_key"])
+            if tool.name == "clear_session":
+                turn = getattr(runtime.sessions, "turn", None)
+                if turn is not None:
+                    async with turn(pending_session_key):
+                        result = await tool.handler(
+                            runtime,
+                            user_id,
+                            arguments,
+                            pending_session_key,
+                        )
+                else:
+                    result = await tool.handler(
+                        runtime,
+                        user_id,
+                        arguments,
+                        pending_session_key,
+                    )
+            else:
+                result = await tool.handler(
+                    runtime,
+                    user_id,
+                    arguments,
+                    pending_session_key,
+                )
         except _SERVICE_ERRORS as exc:
             await runtime.db.finish_pending_agent_action(pending["id"], "failed")
             logger.warning(

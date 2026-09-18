@@ -6,6 +6,7 @@ import pytest
 from rumi_helper.database.db import Database
 from rumi_helper.services.agent.harness import AgentHarness, _parse_plan
 from rumi_helper.services.qq.dispatcher import BroadcastReport, SendResult
+from rumi_helper.services.session.manager import SessionManager
 
 
 @pytest.fixture
@@ -491,6 +492,40 @@ async def test_agent_cannot_clear_shared_group_session_as_non_admin(db):
         "SELECT COUNT(*) AS count FROM pending_agent_actions",
         (),
     ) == {"count": 0}
+
+
+@pytest.mark.asyncio
+async def test_agent_clear_session_confirmation_waits_for_inflight_turn(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"clear_session","arguments":{}}'),
+        FakeGitHub(),
+    )
+    runtime.sessions = SessionManager(db, max_context_messages=10)
+    harness = AgentHarness()
+    event = _event("user-1")
+    session_key = "private:user-1"
+    await runtime.sessions.append(session_key, "user", "old context")
+
+    pending = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="清空当前会话",
+    )
+    assert pending is not None and "确认执行" in pending.message
+
+    async with runtime.sessions.turn(session_key):
+        confirming = asyncio.create_task(
+            harness.confirm(runtime=runtime, event=event)
+        )
+        await asyncio.sleep(0)
+        assert confirming.done() is False
+        assert await runtime.sessions.get_context(session_key) == [
+            {"role": "user", "content": "old context"}
+        ]
+
+    assert await confirming == "当前会话已清空。"
+    assert await runtime.sessions.get_context(session_key) == []
 
 
 @pytest.mark.asyncio
