@@ -69,7 +69,7 @@ class Database(
         try:
             connection.row_factory = aiosqlite.Row
             await connection.execute("PRAGMA busy_timeout=10000")
-            await connection.execute("PRAGMA journal_mode=WAL")
+            await self._execute_with_lock_retry("PRAGMA journal_mode=WAL")
             await self._apply_migrations()
         except Exception:
             await connection.close()
@@ -130,8 +130,28 @@ class Database(
                 rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def _execute_with_lock_retry(
+        self,
+        sql: str,
+        params: tuple = (),
+        *,
+        attempts: int = 20,
+    ) -> None:
+        delay = 0.01
+        for attempt in range(max(1, attempts)):
+            try:
+                cursor = await self.conn.execute(sql, params)
+                await cursor.close()
+                return
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if "locked" not in message or attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 0.25)
+
     async def _apply_migrations(self) -> None:
-        await self.conn.execute(
+        await self._execute_with_lock_retry(
             "CREATE TABLE IF NOT EXISTS schema_migrations "
             "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
         )
@@ -145,7 +165,7 @@ class Database(
                 # Serialize migration writers across processes. Re-check after
                 # acquiring the write lock because another process may have
                 # applied this version while we were waiting.
-                await self.conn.execute("BEGIN IMMEDIATE")
+                await self._execute_with_lock_retry("BEGIN IMMEDIATE")
                 async with self.conn.execute(
                     "SELECT 1 FROM schema_migrations WHERE version = ?",
                     (int(version),),
