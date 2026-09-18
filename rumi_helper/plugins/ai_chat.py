@@ -88,6 +88,13 @@ async def _with_reply_context(event: MessageEvent, text: str) -> str:
     )
 
 
+async def _memory_context_for_event(runtime, event: MessageEvent) -> str:
+    """Never auto-inject private long-term memory into group conversations."""
+    if isinstance(event, GroupMessageEvent):
+        return ""
+    return await runtime.memory.context_prompt(str(event.user_id))
+
+
 def _session_key(event: MessageEvent) -> str:
     runtime = get_runtime()
     if isinstance(event, GroupMessageEvent):
@@ -199,7 +206,7 @@ async def _handle(event: MessageEvent):
                 await send_local_reply(matcher, runtime, agent_result.message)
                 return
 
-        memory_context = await runtime.memory.context_prompt(str(event.user_id))
+        memory_context = await _memory_context_for_event(runtime, event)
         prompt_text = await _with_reply_context(event, text)
         messages, context = _build_chat_messages(
             runtime,

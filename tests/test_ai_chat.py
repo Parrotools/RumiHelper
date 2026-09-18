@@ -1,8 +1,33 @@
+from types import SimpleNamespace
+
 import pytest
-from nonebot.adapters.onebot.v11 import Message, MessageSegment, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import (
+    GroupMessageEvent,
+    Message,
+    MessageSegment,
+    PrivateMessageEvent,
+)
 from nonebot.adapters.onebot.v11.event import Reply, Sender
 
 from rumi_helper.plugins import ai_chat
+
+
+def _group_event(message: Message) -> GroupMessageEvent:
+    return GroupMessageEvent(
+        time=0,
+        self_id=10000,
+        post_type="message",
+        sub_type="normal",
+        user_id=20000,
+        message_type="group",
+        message_id=3,
+        group_id=30000,
+        message=message,
+        raw_message=str(message),
+        font=0,
+        sender=Sender(user_id=20000, nickname="提问者"),
+        to_me=True,
+    )
 
 
 def _private_event(message: Message, *, reply: Reply | None = None) -> PrivateMessageEvent:
@@ -20,6 +45,44 @@ def _private_event(message: Message, *, reply: Reply | None = None) -> PrivateMe
         sender=Sender(user_id=20000, nickname="提问者"),
         reply=reply,
     )
+
+
+@pytest.mark.asyncio
+async def test_private_chat_can_use_long_term_memory():
+    calls: list[str] = []
+
+    class FakeMemory:
+        async def context_prompt(self, user_id: str) -> str:
+            calls.append(user_id)
+            return "private memory"
+
+    runtime = SimpleNamespace(memory=FakeMemory())
+    result = await ai_chat._memory_context_for_event(
+        runtime,
+        _private_event(Message("hello")),
+    )
+
+    assert result == "private memory"
+    assert calls == ["20000"]
+
+
+@pytest.mark.asyncio
+async def test_group_chat_does_not_auto_inject_private_long_term_memory():
+    calls: list[str] = []
+
+    class FakeMemory:
+        async def context_prompt(self, user_id: str) -> str:
+            calls.append(user_id)
+            return "private memory"
+
+    runtime = SimpleNamespace(memory=FakeMemory())
+    result = await ai_chat._memory_context_for_event(
+        runtime,
+        _group_event(Message("hello")),
+    )
+
+    assert result == ""
+    assert calls == []
 
 
 def test_render_reply_message_keeps_text_and_describes_non_text_segments():
