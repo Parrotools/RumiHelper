@@ -119,8 +119,9 @@ async def _handle_confirm(event: MessageEvent):
         await send_local_reply(confirm_matcher, runtime, "没有待确认的群发任务（可能已过期或不存在）。")
         return
 
-    # 防重复执行：只有成功把状态改为 confirmed 的一方才能发送
-    if not await runtime.db.finish_pending(pending["id"], "confirmed"):
+    # 原子领取：只有 active -> executing 成功的一方才能实际发送。
+    # 一旦进入 executing 就不再允许 /cancel，避免“已开始发送却又显示取消”的竞态。
+    if not await runtime.db.claim_pending(pending["id"]):
         await send_local_reply(confirm_matcher, runtime, "该任务已被处理。")
         return
 
@@ -129,12 +130,22 @@ async def _handle_confirm(event: MessageEvent):
     try:
         targets = parse_targets(",".join(f"{t['type']}:{t['id']}" for t in pending["targets"]))
     except BroadcastFormatError:
+        await runtime.db.finish_pending(pending["id"], "failed")
         logger.error("pending_broadcast %s 目标数据损坏", pending["id"])
         await send_local_reply(confirm_matcher, runtime, "任务数据异常，已放弃发送。")
         return
 
     logger.info("broadcast 执行 pending_id=%s admin=%s targets=%d", pending["id"], sender_id, len(targets))
-    report = await runtime.dispatcher.broadcast(targets, pending["content"])
+    try:
+        report = await runtime.dispatcher.broadcast(targets, pending["content"])
+    except Exception:  # noqa: BLE001 - execution failure must transition the durable state
+        await runtime.db.finish_pending(pending["id"], "failed")
+        logger.exception("broadcast 执行失败 pending_id=%s admin=%s", pending["id"], sender_id)
+        await send_local_reply(confirm_matcher, runtime, "群发执行失败，任务已标记为失败。")
+        return
+
+    if not await runtime.db.finish_pending(pending["id"], "confirmed"):
+        logger.error("broadcast 终态写入失败 pending_id=%s admin=%s", pending["id"], sender_id)
     await send_local_reply(confirm_matcher, runtime, report.summary_text())
 
 

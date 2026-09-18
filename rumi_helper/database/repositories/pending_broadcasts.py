@@ -6,6 +6,9 @@ from datetime import UTC, datetime, timedelta
 from rumi_helper.database.repositories.common import _now
 
 _PENDING_ACTIVE = "active"
+_PENDING_EXECUTING = "executing"
+_PENDING_CONFIRMED = "confirmed"
+_PENDING_FAILED = "failed"
 _PENDING_CANCELLED = "cancelled"
 _PENDING_EXPIRED = "expired"
 
@@ -65,13 +68,28 @@ class PendingBroadcastRepository:
             row["targets"] = json.loads(row["targets_json"])
             return row
 
+    async def claim_pending(self, pending_id: int) -> bool:
+        """Atomically claim an active broadcast for execution."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE pending_broadcasts SET status = ? WHERE id = ? AND status = ?",
+            (_PENDING_EXECUTING, pending_id, _PENDING_ACTIVE),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount > 0
+
     async def finish_pending(self, pending_id: int, status: str) -> bool:
-        """把 active 置为终态。返回 False 说明已被处理（防重复执行）。"""
-        if status not in {"confirmed", "cancelled", "expired"}:
+        """Move a pending broadcast into a valid terminal state."""
+        previous = {
+            _PENDING_CANCELLED: _PENDING_ACTIVE,
+            _PENDING_EXPIRED: _PENDING_ACTIVE,
+            _PENDING_CONFIRMED: _PENDING_EXECUTING,
+            _PENDING_FAILED: _PENDING_EXECUTING,
+        }.get(status)
+        if previous is None:
             raise ValueError("无效的 pending broadcast 状态")
         async with self.operation(), self.conn.execute(
             "UPDATE pending_broadcasts SET status = ? WHERE id = ? AND status = ?",
-            (status, pending_id, _PENDING_ACTIVE),
+            (status, pending_id, previous),
         ) as cursor:
             await self.conn.commit()
             return cursor.rowcount > 0

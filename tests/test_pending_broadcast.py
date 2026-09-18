@@ -38,8 +38,10 @@ async def test_ttl_expiry(db):
 
 async def test_finish_prevents_double_execute(db):
     pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
+    assert await db.claim_pending(pid) is True
     assert await db.finish_pending(pid, "confirmed") is True
-    # 第二次确认失败（防重复执行）
+    # 第二次领取/确认都失败（防重复执行）
+    assert await db.claim_pending(pid) is False
     assert await db.finish_pending(pid, "confirmed") is False
     assert await db.get_active_pending("admin1") is None
 
@@ -58,6 +60,22 @@ async def test_cancel(db):
     pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
     assert await db.finish_pending(pid, "cancelled") is True
     assert await db.get_active_pending("admin1") is None
+
+
+async def test_executing_broadcast_cannot_be_cancelled(db):
+    pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
+    assert await db.claim_pending(pid) is True
+    assert await db.finish_pending(pid, "cancelled") is False
+    assert await db.finish_pending(pid, "failed") is True
+
+
+async def test_concurrent_claim_has_single_winner(db):
+    pid = await db.create_pending_broadcast("admin1", [], "hello", ttl_seconds=300)
+    results = await asyncio.gather(
+        db.claim_pending(pid),
+        db.claim_pending(pid),
+    )
+    assert sorted(results) == [False, True]
 
 
 async def test_concurrent_replacement_leaves_only_one_active(db):
