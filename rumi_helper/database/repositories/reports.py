@@ -52,6 +52,62 @@ class ReportRepository:
             )
             return int(row["id"])
 
+    async def save_reports_and_enqueue_users(
+        self,
+        reports: list[dict],
+        max_attempts: int,
+    ) -> int:
+        """Atomically persist a report batch and queue each newly-created delivery once."""
+        if not reports:
+            return 0
+
+        queued = 0
+        next_attempt_at = _now()
+        async with self.operation():
+            try:
+                for item in reports:
+                    owner_id = str(item["owner_id"])
+                    report_type = str(item["report_type"])
+                    period_start = str(item["period_start"])
+                    period_end = str(item["period_end"])
+                    content = str(item["content"])
+                    delivery_content = str(item["delivery_content"])
+
+                    async with self.conn.execute(
+                        "INSERT INTO reports "
+                        "(owner_id, report_type, period_start, period_end, content) "
+                        "VALUES (?, ?, ?, ?, ?) "
+                        "ON CONFLICT(owner_id, report_type, period_start) DO NOTHING",
+                        (owner_id, report_type, period_start, period_end, content),
+                    ) as cursor:
+                        created = cursor.rowcount == 1
+
+                    if created:
+                        await self.conn.execute(
+                            "INSERT INTO outbound_messages "
+                            "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                            "VALUES ('user', ?, ?, ?, ?)",
+                            (
+                                owner_id,
+                                delivery_content,
+                                max(1, int(max_attempts)),
+                                next_attempt_at,
+                            ),
+                        )
+                        queued += 1
+                    else:
+                        await self.conn.execute(
+                            "UPDATE reports SET period_end = ?, content = ? "
+                            "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
+                            (period_end, content, owner_id, report_type, period_start),
+                        )
+
+                await self.conn.commit()
+                return queued
+            except Exception:
+                await self.conn.rollback()
+                raise
+
     async def save_report_and_enqueue_user(
         self,
         owner_id: str,
@@ -62,52 +118,22 @@ class ReportRepository:
         delivery_content: str,
         max_attempts: int,
     ) -> tuple[int, bool]:
-        """Atomically persist a report and enqueue its first delivery exactly once.
-
-        The reports uniqueness constraint is the idempotency key. Re-running the
-        same period updates the stored content but does not create another
-        outbound row.
-        """
-        async with self.operation():
-            try:
-                async with self.conn.execute(
-                    "INSERT INTO reports "
-                    "(owner_id, report_type, period_start, period_end, content) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(owner_id, report_type, period_start) DO NOTHING",
-                    (owner_id, report_type, period_start, period_end, content),
-                ) as cursor:
-                    created = cursor.rowcount == 1
-
-                if not created:
-                    await self.conn.execute(
-                        "UPDATE reports SET period_end = ?, content = ? "
-                        "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
-                        (period_end, content, owner_id, report_type, period_start),
-                    )
-
-                row = await self.fetchone(
-                    "SELECT id FROM reports "
-                    "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
-                    (owner_id, report_type, period_start),
-                )
-                report_id = int(row["id"])
-
-                if created:
-                    await self.conn.execute(
-                        "INSERT INTO outbound_messages "
-                        "(target_type, target_id, content, max_attempts, next_attempt_at) "
-                        "VALUES ('user', ?, ?, ?, ?)",
-                        (
-                            owner_id,
-                            delivery_content,
-                            max(1, int(max_attempts)),
-                            _now(),
-                        ),
-                    )
-
-                await self.conn.commit()
-                return report_id, created
-            except Exception:
-                await self.conn.rollback()
-                raise
+        """Compatibility wrapper for a single report/outbound transaction."""
+        queued = await self.save_reports_and_enqueue_users(
+            [
+                {
+                    "owner_id": owner_id,
+                    "report_type": report_type,
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "content": content,
+                    "delivery_content": delivery_content,
+                }
+            ],
+            max_attempts,
+        )
+        row = await self.fetchone(
+            "SELECT id FROM reports WHERE owner_id = ? AND report_type = ? AND period_start = ?",
+            (owner_id, report_type, period_start),
+        )
+        return int(row["id"]), queued == 1

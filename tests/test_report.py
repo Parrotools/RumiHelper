@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date
 
 import pytest
@@ -20,6 +21,7 @@ class FakeDispatcher:
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
         self.enqueued: list[tuple[str, str]] = []
+        self.wake_calls = 0
 
     async def send_user(self, user_id: str, message: str):
         self.calls.append((str(user_id), message))
@@ -27,6 +29,9 @@ class FakeDispatcher:
     async def enqueue_user(self, user_id: str, message: str):
         self.enqueued.append((str(user_id), message))
         return 1
+
+    def notify_queue_changed(self):
+        self.wake_calls += 1
 
 
 def _snapshot(sha: str, stars: int) -> GitHubSnapshot:
@@ -88,6 +93,7 @@ async def test_scheduled_daily_report_respects_user_setting_and_sends(db):
         "status": "pending",
         "max_attempts": 3,
     }
+    assert dispatcher.wake_calls == 1
 
 
 async def test_scheduled_daily_report_is_idempotent_per_period(db):
@@ -129,10 +135,47 @@ async def test_report_and_outbound_enqueue_roll_back_together(db):
         (),
     )
 
-    await service.run_scheduled_report({"report_date": "2030-01-02"})
+    with pytest.raises(sqlite3.IntegrityError):
+        await service.run_scheduled_report({"report_date": "2030-01-02"})
 
     assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 0}
     assert await db.fetchone(
         "SELECT COUNT(*) AS count FROM outbound_messages",
         (),
     ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+
+async def test_daily_report_batch_rolls_back_all_users_if_second_enqueue_fails(db):
+    dispatcher = FakeDispatcher()
+    notifications = NotificationSettingsService(db)
+    await notifications.set("user-1", daily_report=True)
+    await notifications.set("user-2", daily_report=True)
+    service = ReportService(db, dispatcher, notifications, timezone_name="UTC")
+
+    await db.execute(
+        "CREATE TRIGGER reject_second_report_outbound BEFORE INSERT ON outbound_messages "
+        "WHEN NEW.target_id = 'user-2' "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await service.run_scheduled_report({"report_date": "2030-01-02"})
+
+    assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 0}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+    await db.execute("DROP TRIGGER reject_second_report_outbound", ())
+    await service.run_scheduled_report({"report_date": "2030-01-02"})
+
+    assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 2}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 2}
+    assert dispatcher.wake_calls == 1

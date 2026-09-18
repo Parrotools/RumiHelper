@@ -1,7 +1,6 @@
 """日报聚合与定时发送。"""
 
 import json
-import logging
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -50,22 +49,28 @@ class ReportService:
             raise ReportError("日报未配置消息发送器")
         report_date = self._task_date(task)
         period_start, period_end = self._period(report_date)
+        reports: list[dict] = []
         for owner_id in await self._db.fetch_daily_report_users():
-            try:
-                if not (await self._notifications.get(owner_id))["daily_report"]:
-                    continue
-                content = await self.build_daily_report(owner_id, report_date)
-                await self._db.save_report_and_enqueue_user(
-                    owner_id,
-                    "daily",
-                    period_start,
-                    period_end,
-                    content,
-                    truncate_for_qq(content),
-                    self._outbound_max_attempts,
-                )
-            except Exception:
-                logging.getLogger(__name__).exception("日报发送失败 owner=%s", owner_id)
+            if not (await self._notifications.get(owner_id))["daily_report"]:
+                continue
+            content = await self.build_daily_report(owner_id, report_date)
+            reports.append(
+                {
+                    "owner_id": owner_id,
+                    "report_type": "daily",
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "content": content,
+                    "delivery_content": truncate_for_qq(content),
+                }
+            )
+
+        queued = await self._db.save_reports_and_enqueue_users(
+            reports,
+            self._outbound_max_attempts,
+        )
+        if queued:
+            self._dispatcher.notify_queue_changed()
 
     async def _github_items(self, owner_id: str, period_start: str, period_end: str) -> list[dict]:
         items = []
