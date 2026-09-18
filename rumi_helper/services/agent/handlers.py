@@ -185,11 +185,9 @@ async def clear_session(runtime: Any, user_id: str, arguments: dict[str, Any], s
 
 async def status(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
     del arguments, session_key
-    health = await runtime.health.check()
-    return format_status(
-        health,
-        detailed=runtime.permission.is_admin(user_id),
-    )
+    detailed = runtime.permission.is_admin(user_id)
+    health = await runtime.health.check(include_diagnostics=detailed)
+    return format_status(health, detailed=detailed)
 
 
 async def daily_report(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:

@@ -110,15 +110,22 @@ class FakeSessions:
 
 
 class FakeHealth:
-    async def check(self) -> dict:
-        return {
+    def __init__(self):
+        self.include_diagnostics_calls: list[bool] = []
+
+    async def check(self, *, include_diagnostics: bool = True) -> dict:
+        self.include_diagnostics_calls.append(include_diagnostics)
+        result = {
             "uptime_seconds": 10,
             "llm": {"ok": True},
             "database": {"ok": True},
+            "github": {"ok": True},
             "scheduler": {"running": True, "jobs": 1},
-            "counts": {"github_repositories": 1, "memories": 2},
-            "recent_errors": [],
         }
+        if include_diagnostics:
+            result["counts"] = {"github_repositories": 1, "memories": 2}
+            result["recent_errors"] = []
+        return result
 
 
 class FakeReport:
@@ -437,6 +444,27 @@ async def test_agent_status_is_minimal_for_non_admin(db):
     assert "服务：正常" in result.message
     assert "GitHub 监控" not in result.message
     assert "Memory" not in result.message
+    assert runtime.health.include_diagnostics_calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_agent_admin_status_requests_diagnostics(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"status","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=_event("admin"),
+        text="看看机器人状态",
+    )
+
+    assert result is not None
+    assert "GitHub 监控：1" in result.message
+    assert runtime.health.include_diagnostics_calls == [True]
 
 
 @pytest.mark.asyncio
