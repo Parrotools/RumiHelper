@@ -22,6 +22,10 @@ REDUCE_INSTRUCTION = (
 
 _SINGLE_INSTRUCTION = "请总结以下网页内容，严格按格式输出：标题 / 一句话结论 / 核心内容 / 重要数据 / 值得注意 / 来源。没有的信息写“无”，不要编造。"
 
+_MAP_MAX_TOKENS = 700
+_FINAL_MAX_TOKENS = 1200
+_MAX_PARTIAL_CHARS = 4000
+
 
 def chunk_text(text: str, chunk_chars: int = 4000, overlap: int = 200) -> list[str]:
     """按字符切块（带少量 overlap 防止句子被切断后语义丢失）。"""
@@ -64,7 +68,10 @@ class WebSummarizer:
 
         if len(text) <= self._chunk_chars:
             content = f"{_SINGLE_INSTRUCTION}\n\n{body}{wrap_untrusted_content(text)}"
-            return await self._provider.chat(self._chat_messages(content))
+            return await self._provider.chat(
+                self._chat_messages(content),
+                max_tokens=_FINAL_MAX_TOKENS,
+            )
 
         all_chunks = chunk_text(text, self._chunk_chars)
         chunks = all_chunks[: self._max_chunks]
@@ -76,14 +83,22 @@ class WebSummarizer:
                 f"{MAP_INSTRUCTION.format(index=i, total=len(chunks))}\n\n"
                 f"{body}{wrap_untrusted_content(chunk)}"
             )
-            partial = await self._provider.chat(self._chat_messages(content))
-            partials.append(f"[第 {i}/{len(chunks)} 段摘要]\n{partial}")
+            partial = await self._provider.chat(
+                self._chat_messages(content),
+                max_tokens=_MAP_MAX_TOKENS,
+            )
+            partials.append(
+                f"[第 {i}/{len(chunks)} 段摘要]\n{partial[:_MAX_PARTIAL_CHARS]}"
+            )
 
         reduce_content = (
             f"{REDUCE_INSTRUCTION}\n\n网页标题：{doc.title or '（无标题）'}\n网页 URL：{doc.url}\n\n"
             f"分段摘要汇总：\n{wrap_untrusted_content(chr(10).join(partials))}"
         )
-        final = await self._provider.chat(self._chat_messages(reduce_content))
+        final = await self._provider.chat(
+            self._chat_messages(reduce_content),
+            max_tokens=_FINAL_MAX_TOKENS,
+        )
 
         if truncated:
             final += (

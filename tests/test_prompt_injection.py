@@ -35,9 +35,11 @@ class RecordingProvider:
     def __init__(self, reply="ok"):
         self.reply = reply
         self.calls: list[list[dict]] = []
+        self.max_tokens_calls: list[int | None] = []
 
     async def chat(self, messages, *, temperature=0.7, max_tokens=None):
         self.calls.append(messages)
+        self.max_tokens_calls.append(max_tokens)
         return self.reply
 
     async def aclose(self):
@@ -80,3 +82,26 @@ async def test_summarizer_never_receives_dispatcher():
     source = inspect.getsource(mod)
     assert "MessageDispatcher" not in source
     assert "dispatcher" not in source.lower()
+
+
+async def test_summarizer_bounds_verbose_partial_outputs_before_reduce():
+    provider = RecordingProvider(reply="x" * 10000)
+    summarizer = WebSummarizer(
+        provider,
+        chunk_chars=100,
+        max_chunks=2,
+    )
+    doc = WebDocument(
+        url="https://example.com/long",
+        title="Long",
+        text="a" * 260,
+    )
+
+    await summarizer.summarize(doc)
+
+    assert provider.max_tokens_calls == [700, 700, 1200]
+    assert len(provider.calls) == 3
+    reduce_user = provider.calls[-1][-1]["content"]
+    assert "x" * 4000 in reduce_user
+    assert "x" * 4001 not in reduce_user
+    assert len(reduce_user) < 10000
