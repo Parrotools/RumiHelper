@@ -11,6 +11,7 @@ from nonebot.rule import Rule
 
 from app.personality.manager import PersonaContext
 from app.promptlib import load_prompt
+from app.security.permissions import shared_session_clear_requires_admin
 from app.services.llm.base import LLMError
 from app.services.runtime import get_runtime
 from app.services.session.manager import SessionManager
@@ -34,7 +35,7 @@ _DELEGATED_COMMANDS = {
 HELP_TEXT = (
     "可用命令：\n"
     "/ai <问题> —— 进入 AI 对话（私聊或群聊）\n"
-    "/clear —— 清空当前会话上下文\n"
+    "/clear —— 清空当前会话上下文（共享群上下文仅 Bot 管理员可清空）\n"
     "/总结 <URL> 或 /summary <URL> —— 总结网页（一次最多 3 个 URL）\n"
     "/help 或 /帮助 —— 显示本帮助\n"
     "/remember [类型] -- 内容 —— 保存长期记忆\n"
@@ -398,6 +399,12 @@ async def _session_turn(sessions, session_key: str) -> AsyncIterator[None]:
         yield
 
 
+def _can_clear_session(runtime, user_id: str, session_key: str) -> bool:
+    if not shared_session_clear_requires_admin(session_key):
+        return True
+    return runtime.permission.is_admin(str(user_id))
+
+
 async def _append_turn(sessions, session_key: str, user_text: str, assistant_text: str) -> None:
     """Persist a full turn atomically when supported by the concrete SessionManager."""
     append_turn = getattr(sessions, "append_turn", None)
@@ -446,6 +453,9 @@ async def _handle(event: MessageEvent):
         await send_local_reply(matcher, runtime, f"未知命令 {first_token}。\n\n{HELP_TEXT}")
         return
     if text == "/clear":
+        if not _can_clear_session(runtime, str(event.user_id), session_key):
+            await send_local_reply(matcher, runtime, "共享群会话仅 Bot 管理员可清空。")
+            return
         async with _session_turn(runtime.sessions, session_key):
             await runtime.sessions.clear(session_key)
             await send_local_reply(matcher, runtime, "当前会话已清空。")
@@ -534,6 +544,9 @@ async def _handle_meta(event: GroupMessageEvent):
     text = strip_bot_mention(event.message.extract_plain_text())
     if text == "/clear":
         session_key = _session_key(event)
+        if not _can_clear_session(runtime, str(event.user_id), session_key):
+            await send_local_reply(meta_matcher, runtime, "共享群会话仅 Bot 管理员可清空。")
+            return
         async with _session_turn(runtime.sessions, session_key):
             await runtime.sessions.clear(session_key)
             await send_local_reply(meta_matcher, runtime, "当前会话已清空。")

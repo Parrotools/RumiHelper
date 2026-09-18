@@ -3,6 +3,12 @@
 from collections.abc import Iterable
 
 
+def shared_session_clear_requires_admin(session_key: str) -> bool:
+    """Shared group context is cross-user state, so clearing it is admin-only."""
+    parts = str(session_key).split(":")
+    return len(parts) == 2 and parts[0] == "group" and bool(parts[1])
+
+
 def notification_target_requires_admin(
     actor_id: str,
     target_type: str,

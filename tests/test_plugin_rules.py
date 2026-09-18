@@ -106,6 +106,19 @@ async def test_chat_group_meta_commands_require_bot_mention():
     assert await chat_meta_trigger(_group_event("@Rumi /help", to_me=False, mid=112)) is True
 
 
+def test_shared_group_clear_requires_bot_admin():
+    from app.plugins.ai_chat import _can_clear_session
+
+    runtime = SimpleNamespace(
+        permission=SimpleNamespace(is_admin=lambda user_id: user_id == "admin")
+    )
+
+    assert _can_clear_session(runtime, "user-1", "group:30000") is False
+    assert _can_clear_session(runtime, "admin", "group:30000") is True
+    assert _can_clear_session(runtime, "user-1", "group:30000:user-1") is True
+    assert _can_clear_session(runtime, "user-1", "private:user-1") is True
+
+
 def test_help_text_describes_reminders_and_broadcast_confirmation():
     assert "/remind YYYY-MM-DD HH:MM -- 内容" in HELP_TEXT
     assert "/remind cron:0 6,18 * * * -- 内容" in HELP_TEXT

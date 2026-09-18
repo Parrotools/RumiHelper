@@ -437,3 +437,29 @@ async def test_agent_status_is_minimal_for_non_admin(db):
     assert "服务：正常" in result.message
     assert "GitHub 监控" not in result.message
     assert "Memory" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_agent_cannot_clear_shared_group_session_as_non_admin(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"clear_session","arguments":{}}'),
+        FakeGitHub(),
+    )
+    runtime.settings.group_shared_context = True
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="user-1", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="清空当前会话",
+    )
+
+    assert result is not None
+    assert result.message == "该操作仅管理员可用。"
+    assert runtime.sessions.cleared == []
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM pending_agent_actions",
+        (),
+    ) == {"count": 0}

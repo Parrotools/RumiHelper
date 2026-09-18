@@ -5,7 +5,10 @@ from collections.abc import Mapping
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.security.permissions import notification_target_requires_admin
+from app.security.permissions import (
+    notification_target_requires_admin,
+    shared_session_clear_requires_admin,
+)
 from app.services.agent.types import AgentArgumentError, AgentTool
 from app.services.github.tracker import GitHubTrackerError, parse_repo_url
 from app.services.memory import VALID_MEMORY_TYPES
@@ -117,9 +120,15 @@ def needs_admin(
     tool: AgentTool,
     arguments: Mapping[str, Any],
     user_id: str | None = None,
+    session_key: str | None = None,
 ) -> bool:
     if tool.requires_admin:
         return True
+    if tool.name == "clear_session":
+        return bool(
+            session_key
+            and shared_session_clear_requires_admin(session_key)
+        )
     if tool.name != "github_watch_repository":
         return False
 

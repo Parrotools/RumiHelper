@@ -338,3 +338,25 @@ async def test_concurrent_notification_updates_do_not_overwrite_each_other(tmp_p
         assert stored["reminder_notify"] is False
     finally:
         await database.close()
+
+
+async def test_scheduled_content_history_keeps_only_latest_twenty(db):
+    task_id = await db.create_scheduled_task(
+        "admin-1",
+        "topic_joke",
+        {"target_type": "group", "target_id": "30000", "topic": "mobile"},
+        "0 12 * * *",
+        "2030-01-01T12:00:00+00:00",
+    )
+
+    for i in range(25):
+        await db.insert_scheduled_content_history(task_id, f"joke-{i}")
+
+    history = await db.fetch_scheduled_content_history(task_id, limit=100)
+    assert len(history) == 20
+    assert history[0] == "joke-24"
+    assert history[-1] == "joke-5"
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM scheduled_content_history WHERE task_id = ?",
+        (task_id,),
+    ) == {"count": 20}

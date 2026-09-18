@@ -1,6 +1,7 @@
 from app.security.permissions import (
     PermissionService,
     notification_target_requires_admin,
+    shared_session_clear_requires_admin,
 )
 
 
@@ -25,3 +26,9 @@ def test_notification_target_requires_admin_except_self_private_target():
     assert notification_target_requires_admin("20001", "user", "20001") is False
     assert notification_target_requires_admin("20001", "user", "20002") is True
     assert notification_target_requires_admin("20001", "group", "30000") is True
+
+
+def test_only_shared_group_session_clear_requires_admin():
+    assert shared_session_clear_requires_admin("group:30000") is True
+    assert shared_session_clear_requires_admin("group:30000:20001") is False
+    assert shared_session_clear_requires_admin("private:20001") is False

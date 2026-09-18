@@ -38,5 +38,17 @@ def test_no_url():
     assert has_url("今天晚上吃什么") is False
 
 
-def test_case_insensitive_dedup():
-    assert extract_urls("https://A.com https://a.com") == ["https://A.com"]
+def test_case_insensitive_host_dedup():
+    assert extract_urls("HTTPS://A.com/X https://a.com/X") == ["HTTPS://A.com/X"]
+
+
+def test_path_and_query_case_are_not_deduplicated():
+    assert extract_urls(
+        "https://example.com/A https://example.com/a "
+        "https://example.com/x?Key=V https://example.com/x?key=V"
+    ) == [
+        "https://example.com/A",
+        "https://example.com/a",
+        "https://example.com/x?Key=V",
+        "https://example.com/x?key=V",
+    ]

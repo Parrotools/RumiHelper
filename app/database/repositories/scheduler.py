@@ -58,7 +58,20 @@ class SchedulerRepository:
         return [str(row["content"]) for row in rows]
 
     async def insert_scheduled_content_history(self, task_id: int, content: str) -> None:
-        await self.execute(
-            "INSERT OR IGNORE INTO scheduled_content_history (task_id, content) VALUES (?, ?)",
-            (task_id, content),
-        )
+        async with self.operation():
+            try:
+                await self.conn.execute(
+                    "INSERT OR IGNORE INTO scheduled_content_history (task_id, content) VALUES (?, ?)",
+                    (task_id, content),
+                )
+                await self.conn.execute(
+                    "DELETE FROM scheduled_content_history WHERE task_id = ? AND id NOT IN ("
+                    "  SELECT id FROM scheduled_content_history WHERE task_id = ? "
+                    "  ORDER BY id DESC LIMIT 20"
+                    ")",
+                    (task_id, task_id),
+                )
+                await self.conn.commit()
+            except Exception:
+                await self.conn.rollback()
+                raise

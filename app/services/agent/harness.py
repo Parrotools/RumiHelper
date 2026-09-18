@@ -101,7 +101,10 @@ class AgentHarness:
 
         user_id = str(event.user_id)
         session_key = _session_key(event, runtime)
-        if needs_admin(tool, arguments, user_id) and not runtime.permission.is_admin(user_id):
+        if (
+            needs_admin(tool, arguments, user_id, session_key)
+            and not runtime.permission.is_admin(user_id)
+        ):
             return AgentResult(True, "该操作仅管理员可用。")
 
         if tool.read_only:
@@ -151,7 +154,10 @@ class AgentHarness:
             arguments = json.loads(pending["arguments"])
             if not isinstance(arguments, dict):
                 raise TypeError("操作参数格式无效")
-            if needs_admin(tool, arguments, user_id) and not runtime.permission.is_admin(user_id):
+            if (
+                needs_admin(tool, arguments, user_id, session_key)
+                and not runtime.permission.is_admin(user_id)
+            ):
                 raise AgentArgumentError("当前账号已不再具备管理员权限")
             result = await tool.handler(runtime, user_id, arguments, str(pending["session_key"]))
         except _SERVICE_ERRORS as exc:
