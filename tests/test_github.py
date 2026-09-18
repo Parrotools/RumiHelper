@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from dataclasses import replace
 from datetime import UTC
 
 import httpx
@@ -207,6 +208,52 @@ async def test_tracker_isolates_repositories_and_records_snapshots(db):
     assert first_check["changes"] == []
     assert {change["type"] for change in second_check["changes"]} == {"commit", "stars"}
     assert await db.fetchone("SELECT COUNT(*) AS count FROM github_snapshots", ()) == {"count": 2}
+
+
+async def test_identical_github_state_does_not_append_duplicate_snapshots(db):
+    client = FakeGitHubClient(_snapshot("same"))
+    dispatcher = FakeDispatcher()
+    tracker = GitHubTracker(db, client, dispatcher)
+    repo = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+
+    await tracker.check("user-1", repo["repo_url"])
+    await tracker.check("user-1", repo["repo_url"])
+    await tracker.run_scheduled_check({})
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_snapshots",
+        (),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+
+async def test_non_notification_snapshot_state_change_is_still_persisted(db):
+    baseline = _snapshot("same")
+    client = FakeGitHubClient(baseline)
+    tracker = GitHubTracker(db, client)
+    repo = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+    await tracker.check("user-1", repo["repo_url"])
+
+    client.snapshot = replace(baseline, watchers=7)
+    result = await tracker.check("user-1", repo["repo_url"])
+
+    assert result["changes"] == []
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM github_snapshots",
+        (),
+    ) == {"count": 2}
+    latest = await db.fetch_latest_github_snapshot(repo["id"])
+    assert latest is not None and latest["watchers"] == 7
 
 
 async def test_tracker_prevents_watching_another_users_repository(db):

@@ -41,6 +41,27 @@ def parse_repo_url(url: str) -> GitHubRepoRef:
     return GitHubRepoRef(owner, name, f"https://github.com/{owner}/{name}")
 
 
+_SNAPSHOT_STATE_FIELDS = (
+    "stars",
+    "forks",
+    "watchers",
+    "commits_count",
+    "latest_commit_sha",
+    "latest_commit_message",
+    "latest_commit_author",
+    "latest_commit_time",
+    "latest_release",
+    "open_issues_count",
+)
+
+
+def _same_snapshot_state(previous: dict | None, current: dict | GitHubSnapshot) -> bool:
+    if previous is None:
+        return False
+    current_data = current.to_dict() if isinstance(current, GitHubSnapshot) else current
+    return all(previous[field] == current_data[field] for field in _SNAPSHOT_STATE_FIELDS)
+
+
 def compare_snapshots(previous: dict | None, current: dict | GitHubSnapshot) -> list[dict]:
     if previous is None:
         return []
@@ -183,6 +204,7 @@ class GitHubTracker:
             previous = await self._db.fetch_latest_github_snapshot(repo_id)
             changes = compare_snapshots(previous, snapshot)
             result = {"repo": repo, "snapshot": snapshot, "changes": changes}
+            should_persist = not _same_snapshot_state(previous, snapshot)
 
             deliveries: list[dict] = []
             if queue_notifications and changes:
@@ -198,7 +220,7 @@ class GitHubTracker:
                         for target in await self._db.fetch_github_notifications(repo_id)
                     ]
 
-            if queue_notifications:
+            if should_persist and queue_notifications:
                 expected_previous_id = int(previous["id"]) if previous is not None else 0
                 snapshot_id = await self._db.insert_github_snapshot_and_outbound(
                     repo_id,
@@ -213,7 +235,7 @@ class GitHubTracker:
                     and self._dispatcher is not None
                 ):
                     self._dispatcher.notify_queue_changed()
-            else:
+            elif should_persist:
                 await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
             return result
 
