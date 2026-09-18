@@ -121,8 +121,22 @@ def _load(path: Path) -> Personality:
 
 class PersonalityManager:
     def __init__(self, path: str | Path):
-        self.path = Path(path)
+        self.path = self._resolve_path(path)
         self.personality = _load(self.path)
+
+    @staticmethod
+    def _resolve_path(path: str | Path) -> Path:
+        """Prefer explicit filesystem paths, then resolve app/personality/* from package data."""
+        candidate = Path(path)
+        if candidate.is_absolute() or candidate.exists():
+            return candidate
+
+        parts = candidate.parts
+        if len(parts) >= 3 and parts[:2] == ("app", "personality"):
+            packaged = Path(__file__).parent.joinpath(*parts[2:])
+            if packaged.exists():
+                return packaged
+        return candidate
 
     def build_system_prompt(
         self,

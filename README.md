@@ -61,7 +61,7 @@ copy .env.example .env                # Windows（Linux: cp）
 # 3. 安装并登录 NapCatQQ（见下文第 5-7 节）
 
 # 4. 启动
-.venv/Scripts/python bot.py
+.venv/Scripts/rumi-helper.exe
 
 # 5. 用另一个 QQ 号私聊机器人发"你好"验证链路
 ```
@@ -156,7 +156,7 @@ cp .env.example .env      # Windows: copy .env.example .env
 ## 7. 启动 Bot
 
 ```bash
-python bot.py
+rumi-helper
 ```
 
 看到 NapCat 日志出现 `Websocket connected` / OneBot 事件即链路打通。机器人私聊回复 `/help` 可查看全部命令。
@@ -256,7 +256,7 @@ ADMIN_QQ_IDS=111111,222222
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -e .
 copy .env.example .env   # 编辑后
-.venv\Scripts\python bot.py
+.venv\Scripts\rumi-helper.exe
 ```
 
 建议用 NSSM 或 任务计划程序 注册为常驻服务。
@@ -267,24 +267,10 @@ copy .env.example .env   # 编辑后
 python3.11 -m venv .venv
 .venv/bin/pip install -e .
 cp .env.example .env   # 编辑后
-.venv/bin/python bot.py
+.venv/bin/rumi-helper
 ```
 
-systemd 单元示例 `/etc/systemd/system/qq-llm-bot.service`：
-
-```ini
-[Unit]
-After=network-online.target
-
-[Service]
-WorkingDirectory=/opt/qq-llm-bot
-ExecStart=/opt/qq-llm-bot/.venv/bin/python bot.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
+生产环境建议直接使用仓库中的 `ops/qqbot.service` 模板。默认部署路径为 `/opt/RumiHelper`，安装后由 console entry point `.venv/bin/rumi-helper` 启动；模板同时限制写权限到 `data/`，并启用基础 systemd sandbox。详细安装步骤见 `docs/DEPLOYMENT.md`。
 
 ## 14. 开发
 

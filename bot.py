@@ -7,6 +7,7 @@ NapCatQQ 通过 OneBot 11 反向 WebSocket 连接到本进程：
     Bot 侧监听  ws://<HOST>:<PORT>/onebot/v11/ws
 """
 
+import os
 from pathlib import Path
 
 import nonebot
@@ -18,7 +19,18 @@ nonebot.init()
 driver = nonebot.get_driver()
 driver.register_adapter(OneBotV11Adapter)
 
-nonebot.load_plugins(str(Path(__file__).parent / "app" / "plugins"))
+def _load_packaged_plugins() -> None:
+    """Load plugins without requiring the process cwd to contain app/plugins."""
+    package_root = Path(__file__).resolve().parent
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(package_root)
+        nonebot.load_plugins(str(package_root / "app" / "plugins"))
+    finally:
+        os.chdir(original_cwd)
+
+
+_load_packaged_plugins()
 
 
 async def _startup() -> None:
@@ -66,5 +78,10 @@ async def healthz():
         return JSONResponse({"ok": False, "detail": "starting"}, status_code=503)
     return JSONResponse(result, status_code=200 if result["ok"] else 503)
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console entry point for source and wheel installations."""
     nonebot.run()
+
+
+if __name__ == "__main__":
+    main()

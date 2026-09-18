@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Static checks
+        run: |
+          python -m ruff check app tests ops/napcat/napcat_watchdog.py bot.py scripts/send_message.py
+          python -m compileall -q app ops/napcat bot.py
+          python -m pip check
+
+      - name: Tests
+        run: python -m pytest -q -W error
+
+      - name: Server startup smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          env \
+            DRIVER='~fastapi' \
+            HOST=127.0.0.1 \
+            PORT=18080 \
+            DATABASE_PATH="$tmp/bot.db" \
+            LLM_BASE_URL=http://127.0.0.1:9/v1 \
+            LLM_API_KEY='' \
+            ADMIN_QQ_IDS='' \
+            OWNER_QQ_ID='' \
+            ONEBOT_ACCESS_TOKEN=smoke-token \
+            GITHUB_CHECK_CRON='' \
+            GITHUB_DIGEST_CRON='' \
+            DAILY_REPORT_CRON='' \
+            ENABLE_PLAYWRIGHT=false \
+            rumi-helper >server.log 2>&1 &
+          pid=$!
+          cleanup() {
+            kill -TERM "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18080/livez >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat server.log
+            exit 1
+          fi
+
+          kill -TERM "$pid"
+          set +e
+          wait "$pid"
+          code=$?
+          set -e
+          trap - EXIT
+          if [ "$code" -ne 0 ] && [ "$code" -ne 143 ]; then
+            cat server.log
+            exit "$code"
+          fi
+          grep -q "Application shutdown complete" server.log
+
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps -w dist
+
+      - name: Verify wheel runtime assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          wheel = next(Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+
+          required = {
+              "bot.py",
+              "app/personality/luna.yaml",
+              "app/personality/rumi.yaml",
+              "app/prompts/agent.txt",
+              "app/prompts/chat.txt",
+              "app/prompts/webpage_summary.txt",
+          }
+          missing = required - names
+          if missing:
+              raise SystemExit(f"wheel missing runtime files: {sorted(missing)}")
+
+          entry_points = [
+              name for name in names
+              if name.endswith(".dist-info/entry_points.txt")
+          ]
+          if len(entry_points) != 1:
+              raise SystemExit("wheel does not contain exactly one entry_points.txt")
+          with zipfile.ZipFile(wheel) as archive:
+              text = archive.read(entry_points[0]).decode()
+          if "rumi-helper = bot:main" not in text:
+              raise SystemExit("rumi-helper console entry point missing")
+          PY

@@ -10,9 +10,9 @@
 
 ```powershell
 py -3.11 -m venv .venv
-.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\pip install -e "."
 copy .env.example .env
-.venv\Scripts\python bot.py
+.venv\Scripts\rumi-helper.exe
 ```
 
 建议用任务计划程序或 NSSM 以工作目录设为项目根目录运行上述命令。停止前发送正常终止信号，避免强制杀进程。
@@ -21,12 +21,27 @@ copy .env.example .env
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -e "."
 cp .env.example .env
-.venv/bin/python bot.py
+.venv/bin/rumi-helper
 ```
 
-生产环境可用 systemd，`WorkingDirectory` 指向项目根目录，`ExecStart` 使用 `.venv/bin/python bot.py`，并设置 `Restart=on-failure`。日志由 systemd 或进程管理器收集。
+仓库提供 `ops/qqbot.service` 作为生产 systemd 模板。模板默认项目位于 `/opt/RumiHelper`，以专用 `qqbot` 用户运行，并只允许写入 `/opt/RumiHelper/data`。安装示例：
+
+```bash
+sudo useradd --system --home /opt/RumiHelper --shell /usr/sbin/nologin qqbot 2>/dev/null || true
+sudo mkdir -p /opt/RumiHelper/data
+sudo chown -R root:root /opt/RumiHelper
+sudo chown -R qqbot:qqbot /opt/RumiHelper/data
+sudo chown root:qqbot /opt/RumiHelper/.env
+sudo chmod 640 /opt/RumiHelper/.env
+sudo install -m 0644 ops/qqbot.service /etc/systemd/system/qqbot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now qqbot.service
+sudo systemctl status qqbot.service
+```
+
+如果部署目录不是 `/opt/RumiHelper`，先修改 unit 中的 `WorkingDirectory`、`ExecStart` 和 `ReadWritePaths`。日志由 journald 收集，可用 `journalctl -u qqbot.service -f` 查看。
 
 ## NapCat OneBot 11
 
