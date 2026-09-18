@@ -211,9 +211,20 @@ class MessageDispatcher:
         params: dict = {"message": message, **({"user_id": numeric_id} if target_type == "user" else {"group_id": numeric_id})}
         try:
             resp = await self._call_api(action, **params)
-            mid = resp.get("message_id") if isinstance(resp, dict) else None
-            result = SendResult(target_type, target_id, True, message_id=str(mid) if mid is not None else None)
-            logger.info("已发送 type=%s id=%s message_id=%s", target_type, target_id, result.message_id)
+            if not isinstance(resp, dict) or resp.get("message_id") is None:
+                raise ValueError("OneBot 发送响应缺少 message_id")
+            result = SendResult(
+                target_type,
+                target_id,
+                True,
+                message_id=str(resp["message_id"]),
+            )
+            logger.info(
+                "已发送 type=%s id=%s message_id=%s",
+                target_type,
+                target_id,
+                result.message_id,
+            )
         except Exception as e:  # noqa: BLE001 —— 单目标失败必须被记录，不向外扩散
             result = SendResult(target_type, target_id, False, error=f"{type(e).__name__}: {e}")
             logger.warning("发送失败 type=%s id=%s %s", target_type, target_id, e)

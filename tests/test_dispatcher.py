@@ -94,3 +94,23 @@ async def test_direct_send_respects_persisted_cooldown_after_restart(db):
     assert result.success is False
     assert "暂停" in (result.error or "")
     assert calls == 0
+
+
+@pytest.mark.parametrize("response", [None, {}, "unexpected"])
+async def test_send_rejects_malformed_onebot_success_response(db, response):
+    async def caller(action: str, **params):
+        return response
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+    result = await dispatcher.send_user("123", "hello")
+
+    assert result.success is False
+    assert "message_id" in (result.error or "")
+    rows = await db.fetchall("SELECT success, error FROM send_logs")
+    assert len(rows) == 1
+    assert rows[0]["success"] == 0
+    assert "message_id" in rows[0]["error"]

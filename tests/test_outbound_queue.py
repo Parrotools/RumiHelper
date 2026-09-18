@@ -191,3 +191,30 @@ async def test_stop_finishes_inflight_delivery_before_worker_exits(db):
         (message_id,),
     ) == {"status": "sent", "message_id": "321"}
     assert dispatcher._queue_task is None
+
+
+async def test_malformed_onebot_response_retries_instead_of_marking_sent(db):
+    async def api_caller(action: str, **params):
+        return {}
+
+    dispatcher = MessageDispatcher(
+        db,
+        api_caller=api_caller,
+        retry_delay_seconds=0,
+    )
+    message_id = await dispatcher.enqueue_user(
+        "123",
+        "must not be marked sent",
+        max_attempts=2,
+    )
+
+    assert await dispatcher.process_outbound_messages(limit=1) == 1
+    row = await db.fetchone(
+        "SELECT status, attempts, last_error, message_id "
+        "FROM outbound_messages WHERE id = ?",
+        (message_id,),
+    )
+    assert row["status"] == "retry"
+    assert row["attempts"] == 1
+    assert row["message_id"] is None
+    assert "message_id" in row["last_error"]
