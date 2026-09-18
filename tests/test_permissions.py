@@ -1,4 +1,4 @@
-from app.security.permissions import (
+from rumi_helper.security.permissions import (
     PermissionService,
     notification_target_requires_admin,
     shared_session_clear_requires_admin,

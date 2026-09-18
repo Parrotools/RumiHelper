@@ -3,8 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from app.services.llm.base import LLMHTTPError, LLMResponseError, LLMTimeoutError
-from app.services.llm.openai_compatible import OpenAICompatibleProvider
+from rumi_helper.services.llm.base import LLMHTTPError, LLMResponseError, LLMTimeoutError
+from rumi_helper.services.llm.openai_compatible import OpenAICompatibleProvider
 
 BASE = "http://llm.test/v1"
 
@@ -35,13 +35,20 @@ async def test_chat_sends_model_and_auth():
     await provider.aclose()
 
 
-async def test_http_error():
+async def test_http_error_does_not_echo_provider_body():
     provider = OpenAICompatibleProvider(
-        BASE, "k", "m", transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom"))
+        BASE,
+        "k",
+        "m",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(500, text="super-secret-provider-echo")
+        ),
     )
     with pytest.raises(LLMHTTPError) as ei:
         await provider.chat([{"role": "user", "content": "hi"}])
     assert ei.value.status_code == 500
+    assert "super-secret-provider-echo" not in str(ei.value)
+    assert ei.value.detail == ""
     await provider.aclose()
 
 

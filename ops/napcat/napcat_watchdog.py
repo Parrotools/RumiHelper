@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 STATE_DIR = Path("/var/lib/napcat-watchdog")
-WEBUI_CONFIG = Path("/root/Napcat/opt/QQ/resources/app/app_launcher/napcat/config/webui.json")
+WEBUI_CONFIG = Path("/root/Napcat/opt/QQ/resources/rumi_helper/app_launcher/napcat/config/webui.json")
 
 
 def classify_error(message: str) -> str:

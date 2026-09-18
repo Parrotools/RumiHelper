@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from app.personality.manager import PersonaContext, PersonalityManager
+from rumi_helper.personality.manager import PersonaContext, PersonalityManager
 
-RUMI = PersonalityManager(Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml")
+RUMI = PersonalityManager(Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml")
 
 
 @pytest.mark.parametrize(

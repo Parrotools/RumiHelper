@@ -22,7 +22,7 @@
 ### Task 1: Versioned database migrations
 
 **Files:**
-- Modify: `app/database/models.py`, `app/database/db.py`
+- Modify: `rumi_helper/database/models.py`, `rumi_helper/database/db.py`
 - Test: `tests/test_migrations.py`
 
 - [ ] Write a test that creates the legacy schema without migration metadata, reconnects through `Database`, and verifies existing rows survive plus migration versions are recorded.
@@ -33,7 +33,7 @@
 ### Task 2: Durable outbound message queue
 
 **Files:**
-- Modify: `app/database/models.py`, `app/database/db.py`, `app/config.py`, `app/services/qq/dispatcher.py`, `app/services/scheduler.py`, `app/services/github/tracker.py`, `app/services/report.py`, `app/services/runtime.py`
+- Modify: `rumi_helper/database/models.py`, `rumi_helper/database/db.py`, `rumi_helper/config.py`, `rumi_helper/services/qq/dispatcher.py`, `rumi_helper/services/scheduler.py`, `rumi_helper/services/github/tracker.py`, `rumi_helper/services/report.py`, `rumi_helper/services/runtime.py`
 - Test: `tests/test_outbound_queue.py`, `tests/test_scheduler.py`, `tests/test_github.py`, `tests/test_report.py`
 
 - [ ] Write tests for successful delivery, retry after failure, terminal failure at the configured attempt limit, and reclaiming an expired sending lease.
@@ -44,8 +44,8 @@
 ### Task 3: Runtime status and health
 
 **Files:**
-- Create: `app/services/health.py`
-- Modify: `app/services/llm/base.py`, `app/services/llm/openai_compatible.py`, `app/services/github/client.py`, `app/services/runtime.py`, `app/plugins/admin.py`, `bot.py`
+- Create: `rumi_helper/services/health.py`
+- Modify: `rumi_helper/services/llm/base.py`, `rumi_helper/services/llm/openai_compatible.py`, `rumi_helper/services/github/client.py`, `rumi_helper/services/runtime.py`, `rumi_helper/plugins/admin.py`, `bot.py`
 - Test: `tests/test_health.py`, `tests/test_plugin_rules.py`
 
 - [ ] Write tests for dependency health results, timeout/error isolation, and status rendering of uptime, counts, scheduler state, and recent errors.

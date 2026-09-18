@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-from app.database.db import Database
-from app.services.qq.broadcast_parser import BroadcastTarget
-from app.services.qq.dispatcher import MessageDispatcher
+from rumi_helper.database.db import Database
+from rumi_helper.services.qq.broadcast_parser import BroadcastTarget
+from rumi_helper.services.qq.dispatcher import MessageDispatcher
 
 
 @pytest.fixture

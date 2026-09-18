@@ -9,16 +9,16 @@ from types import SimpleNamespace
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment, PrivateMessageEvent
 from nonebot.adapters.onebot.v11.event import Sender
 
-from app.plugins import admin as admin_plugin
-from app.plugins import broadcast as broadcast_plugin
-from app.plugins import github as github_plugin
-from app.plugins import memory as memory_plugin
-from app.plugins import report as report_plugin
-from app.plugins import scheduler as scheduler_plugin
-from app.plugins import web_summary
-from app.plugins.ai_chat import HELP_TEXT
-from app.plugins.ai_chat import _meta_trigger as chat_meta_trigger
-from app.plugins.ai_chat import _trigger as chat_trigger
+from rumi_helper.plugins import admin as admin_plugin
+from rumi_helper.plugins import broadcast as broadcast_plugin
+from rumi_helper.plugins import github as github_plugin
+from rumi_helper.plugins import memory as memory_plugin
+from rumi_helper.plugins import report as report_plugin
+from rumi_helper.plugins import scheduler as scheduler_plugin
+from rumi_helper.plugins import web_summary
+from rumi_helper.plugins.ai_chat import HELP_TEXT
+from rumi_helper.plugins.ai_chat import _meta_trigger as chat_meta_trigger
+from rumi_helper.plugins.ai_chat import _trigger as chat_trigger
 
 SELF_ID = "10000"
 
@@ -92,7 +92,21 @@ async def test_chat_self_message_ignored():
 async def test_chat_message_id_dedup():
     ev = _private_event("重复投递的消息", mid=107)
     assert await chat_trigger(ev) is True
-    assert await chat_trigger(ev) is False  # 同一 message_id 第二次不处理
+    assert await chat_trigger(ev) is False  # 同一会话同一 message_id 第二次不处理
+
+
+async def test_chat_dedup_scopes_same_message_id_by_conversation():
+    first_private = _private_event("用户 A", user=20001, mid=5000)
+    second_private = _private_event("用户 B", user=20002, mid=5000)
+    group = _group_event("群消息", at=True, user=20001, mid=5000)
+
+    assert await chat_trigger(first_private) is True
+    assert await chat_trigger(second_private) is True
+    assert await chat_trigger(group) is True
+
+    assert await chat_trigger(first_private) is False
+    assert await chat_trigger(second_private) is False
+    assert await chat_trigger(group) is False
 
 
 async def test_chat_ai_prefix_variants():
@@ -107,7 +121,7 @@ async def test_chat_group_meta_commands_require_bot_mention():
 
 
 def test_shared_group_clear_requires_bot_admin():
-    from app.plugins.ai_chat import _can_clear_session
+    from rumi_helper.plugins.ai_chat import _can_clear_session
 
     runtime = SimpleNamespace(
         permission=SimpleNamespace(is_admin=lambda user_id: user_id == "admin")
@@ -255,7 +269,7 @@ async def test_status_rule():
 # ---------- 长回复截断 ----------
 
 def test_truncate_for_qq():
-    from app.utils import truncate_for_qq
+    from rumi_helper.utils import truncate_for_qq
 
     assert truncate_for_qq("short") == "short"
     long = "x" * 5000
@@ -293,3 +307,67 @@ async def test_summary_success_uses_shared_reply_gate(monkeypatch):
     )
 
     assert sent == ["summary"]
+
+
+async def test_public_status_skips_operational_diagnostics(monkeypatch):
+    calls: list[bool] = []
+    sent: list[str] = []
+
+    class FakeHealth:
+        async def check(self, *, include_diagnostics: bool = True):
+            calls.append(include_diagnostics)
+            return {
+                "uptime_seconds": 1,
+                "database": {"ok": True},
+                "llm": {"ok": True},
+                "github": {"ok": True},
+                "scheduler": {"running": True, "jobs": 0},
+            }
+
+    runtime = SimpleNamespace(
+        health=FakeHealth(),
+        permission=SimpleNamespace(is_admin=lambda _user_id: False),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message):
+        sent.append(message)
+
+    monkeypatch.setattr(admin_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(admin_plugin, "send_local_reply", fake_send_local_reply)
+
+    await admin_plugin._handle(_private_event("/status", mid=404), SimpleNamespace())
+
+    assert calls == [False]
+    assert sent and "服务：正常" in sent[0]
+
+
+async def test_admin_status_requests_operational_diagnostics(monkeypatch):
+    calls: list[bool] = []
+
+    class FakeHealth:
+        async def check(self, *, include_diagnostics: bool = True):
+            calls.append(include_diagnostics)
+            return {
+                "uptime_seconds": 1,
+                "database": {"ok": True},
+                "llm": {"ok": True},
+                "github": {"ok": True},
+                "scheduler": {"running": True, "jobs": 0},
+                "counts": {},
+                "recent_errors": [],
+            }
+
+    runtime = SimpleNamespace(
+        health=FakeHealth(),
+        permission=SimpleNamespace(is_admin=lambda _user_id: True),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, _message):
+        return None
+
+    monkeypatch.setattr(admin_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(admin_plugin, "send_local_reply", fake_send_local_reply)
+
+    await admin_plugin._handle(_private_event("/status", mid=405), SimpleNamespace())
+
+    assert calls == [True]

@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.database.db import Database
-from app.plugins import group_feedback
-from app.services.group_feedback import GroupFeedbackService
+from rumi_helper.database.db import Database
+from rumi_helper.plugins import group_feedback
+from rumi_helper.services.group_feedback import GroupFeedbackService
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-from app.services.web.url_parser import extract_urls, has_url
+from rumi_helper.services.web.url_parser import extract_urls, has_url, safe_url_for_log
 
 
 def test_single_url():
@@ -52,3 +52,12 @@ def test_path_and_query_case_are_not_deduplicated():
         "https://example.com/x?Key=V",
         "https://example.com/x?key=V",
     ]
+
+
+def test_safe_url_for_log_redacts_credentials_path_query_and_fragment():
+    assert safe_url_for_log(
+        "https://user:password@example.com:8443/private/token?secret=abc#fragment"
+    ) == "https://example.com:8443/…"
+    assert safe_url_for_log("https://example.com?token=abc") == "https://example.com/"
+    assert safe_url_for_log("https://[2606:4700::1111]/private") == "https://[2606:4700::1111]/…"
+    assert safe_url_for_log("not-a-url") == "<invalid-url>"

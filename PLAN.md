@@ -81,8 +81,8 @@ NapCatQQ  ──(OneBot 11 反向 WebSocket)──▶  NoneBot2 (Python 3.11+, a
 ```
 qq-llm-bot/
 ├── pyproject.toml / README.md / .env.example / .gitignore
-├── bot.py                      # 入口：nonebot.init + 加载 app.plugins
-├── app/
+├── bot.py                      # 入口：nonebot.init + 加载 rumi_helper.plugins
+├── rumi_helper/
 │   ├── config.py               # 环境变量 → Pydantic Settings
 │   ├── plugins/                # ai_chat / web_summary / memory / scheduler / github / report / admin / broadcast
 │   ├── services/

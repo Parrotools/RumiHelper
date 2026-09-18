@@ -1,11 +1,11 @@
-from app.security.prompt_injection import (
+from rumi_helper.security.prompt_injection import (
     UNTRUSTED_CLOSE,
     UNTRUSTED_OPEN,
     looks_like_injection,
     wrap_untrusted_content,
 )
-from app.services.web.extractor import WebDocument
-from app.services.web.summarizer import WebSummarizer
+from rumi_helper.services.web.extractor import WebDocument
+from rumi_helper.services.web.summarizer import WebSummarizer
 
 
 def test_wrap_adds_delimiters():
@@ -70,7 +70,7 @@ async def test_summarizer_never_receives_dispatcher():
     """总结链路依赖只有 LLMProvider，类型上不存在发送能力。"""
     import inspect
 
-    from app.services.web import summarizer as mod
+    from rumi_helper.services.web import summarizer as mod
 
     sig = inspect.signature(WebSummarizer.__init__)
     param_names = set(sig.parameters)

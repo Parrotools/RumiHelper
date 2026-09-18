@@ -280,7 +280,7 @@ user:789012
 | `LLM_TEMPERATURE` | 0.9 | 基准采样温度；闲聊自动略升、技术问答自动略降 |
 | `NON_LLM_REPLY_DELAY_MIN_SECONDS` / `_MAX_SECONDS` | 2 / 6 | 不调用 LLM 回复的动态延迟范围；最大值设为 0 可关闭 |
 | `NON_LLM_REPLY_DELAY_CHARS_PER_SECOND` | 35 | 动态延迟的文本处理速度，每秒字符数 |
-| `PERSONALITY_FILE` | app/personality/rumi.yaml | YAML 人格配置路径 |
+| `PERSONALITY_FILE` | rumi_helper/personality/rumi.yaml | YAML 人格配置路径 |
 | `OWNER_QQ_ID` | — | 主人的真实 QQ 号；不按昵称判断（留空且只有一个管理员时回退到该 ID） |
 | `OWNER_NAME` | Parrotools | 主人称呼 |
 | `AGENT_TOOL_CALLING_ENABLED` | true | 是否启用自然语言工具操作 |

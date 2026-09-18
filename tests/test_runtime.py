@@ -3,9 +3,9 @@ from typing import ClassVar
 
 import pytest
 
-import app.services.runtime as runtime_module
-from app.config import Settings
-from app.database.db import Database
+import rumi_helper.services.runtime as runtime_module
+from rumi_helper.config import Settings
+from rumi_helper.database.db import Database
 
 
 class TrackingDatabase(Database):

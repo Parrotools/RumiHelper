@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.web.summarizer import chunk_text
+from rumi_helper.services.web.summarizer import chunk_text
 
 
 def test_short_text_single_chunk():

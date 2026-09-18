@@ -2,7 +2,7 @@ import pytest
 from nonebot.adapters.onebot.v11 import Message, MessageSegment, PrivateMessageEvent
 from nonebot.adapters.onebot.v11.event import Reply, Sender
 
-from app.plugins import ai_chat
+from rumi_helper.plugins import ai_chat
 
 
 def _private_event(message: Message, *, reply: Reply | None = None) -> PrivateMessageEvent:

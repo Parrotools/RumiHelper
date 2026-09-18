@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.database.db import Database
-from app.services.agent.harness import AgentHarness, _parse_plan
-from app.services.qq.dispatcher import BroadcastReport, SendResult
+from rumi_helper.database.db import Database
+from rumi_helper.services.agent.harness import AgentHarness, _parse_plan
+from rumi_helper.services.qq.dispatcher import BroadcastReport, SendResult
 
 
 @pytest.fixture

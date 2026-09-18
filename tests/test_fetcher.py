@@ -7,8 +7,8 @@ from types import ModuleType
 import httpx
 import pytest
 
-from app.security.ssrf import SSRFBlockedError
-from app.services.web.fetcher import (
+from rumi_helper.security.ssrf import SSRFBlockedError
+from rumi_helper.services.web.fetcher import (
     FetchTimeoutError,
     PageTooLargeError,
     PlaywrightFetcher,
@@ -58,7 +58,7 @@ async def test_max_bytes_enforced():
 
 async def test_redirect_revalidates_ssrf_each_hop(monkeypatch):
     """原始 URL 是公网，重定向跳到内网 —— 第二跳必须被 SSRF 拒绝。"""
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     resolved_hosts: list[str] = []
 
@@ -86,7 +86,7 @@ async def test_redirect_revalidates_ssrf_each_hop(monkeypatch):
 async def test_too_many_redirects(monkeypatch):
     import ipaddress
 
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     async def fake_resolve(host):
         return [ipaddress.ip_address("93.184.216.34")]
@@ -182,7 +182,7 @@ async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
         if url.startswith("http://127.0.0.1"):
             raise SSRFBlockedError()
 
-    monkeypatch.setattr("app.services.web.fetcher.assert_url_safe", fake_assert_url_safe)
+    monkeypatch.setattr("rumi_helper.services.web.fetcher.assert_url_safe", fake_assert_url_safe)
 
     with pytest.raises(SSRFBlockedError):
         await PlaywrightFetcher().fetch("https://example.com/page")
@@ -233,14 +233,14 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
     async def allow_url(_url: str):
         return None
 
-    monkeypatch.setattr("app.services.web.fetcher.assert_url_safe", allow_url)
+    monkeypatch.setattr("rumi_helper.services.web.fetcher.assert_url_safe", allow_url)
 
     with pytest.raises(FetchTimeoutError, match="navigation timed out"):
         await PlaywrightFetcher().fetch("https://example.com/page")
 
 
 async def test_concurrent_same_url_shares_one_inflight_request(monkeypatch):
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     async def fake_resolve(_host: str):
         return [__import__("ipaddress").ip_address("93.184.216.34")]
@@ -277,7 +277,7 @@ async def test_concurrent_same_url_shares_one_inflight_request(monkeypatch):
 async def test_fetch_pins_connection_to_validated_ip_and_keeps_host_sni(monkeypatch):
     import ipaddress
 
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     async def fake_resolve(_host: str):
         return [ipaddress.ip_address("93.184.216.34")]

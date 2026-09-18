@@ -2,7 +2,7 @@
 
 import httpx
 
-from app.services.web.fetcher import WebFetcher
+from rumi_helper.services.web.fetcher import WebFetcher
 
 HTML = b"<html><body>hello</body></html>"
 
@@ -47,7 +47,7 @@ async def test_failures_not_cached():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"x", headers={"content-type": "application/octet-stream"}, request=request)
 
-    from app.services.web.fetcher import UnsupportedContentTypeError
+    from rumi_helper.services.web.fetcher import UnsupportedContentTypeError
 
     f = WebFetcher(cache_ttl=600, transport=httpx.MockTransport(handler))
     for _ in range(2):

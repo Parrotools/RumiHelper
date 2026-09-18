@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-rumi-helper = "bot:main"
-rumi-doctor = "app.doctor:main"
+rumi-helper = "rumi_helper.cli:main"
+rumi-doctor = "rumi_helper.doctor:main"
 
 [project.optional-dependencies]
 dev = [
@@ -37,14 +37,11 @@ playwright = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = ["bot"]
-
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["rumi_helper*"]
 
 [tool.setuptools.package-data]
-app = [
+rumi_helper = [
     "personality/*.yaml",
     "prompts/*.txt",
 ]

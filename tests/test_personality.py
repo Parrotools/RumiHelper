@@ -5,9 +5,9 @@ import pytest
 from nonebot.adapters.onebot.v11 import Message, PrivateMessageEvent
 from nonebot.adapters.onebot.v11.event import Sender
 
-from app.config import Settings
-from app.personality.manager import PersonaContext, PersonalityConfigError, PersonalityManager
-from app.plugins import ai_chat
+from rumi_helper.config import Settings
+from rumi_helper.personality.manager import PersonaContext, PersonalityConfigError, PersonalityManager
+from rumi_helper.plugins import ai_chat
 
 
 def test_loads_yaml_personality_and_builds_system_prompt(tmp_path: Path):
@@ -37,7 +37,7 @@ rules:
 
 
 def test_default_luna_profile_is_available():
-    path = Path(__file__).parents[1] / "app" / "personality" / "luna.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "luna.yaml"
 
     prompt = PersonalityManager(path).build_system_prompt("基础安全规则")
 
@@ -46,7 +46,7 @@ def test_default_luna_profile_is_available():
 
 
 def test_default_rumi_profile_has_contextual_examples():
-    path = Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml"
     manager = PersonalityManager(path)
 
     owner_examples = manager.build_few_shot_messages(PersonaContext(relationship="owner"))
@@ -59,7 +59,7 @@ def test_default_rumi_profile_has_contextual_examples():
 
 
 def test_rumi_profile_is_lively_and_girlish():
-    path = Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml"
     manager = PersonalityManager(path)
 
     assert "热情" in manager.personality.description
@@ -97,7 +97,7 @@ def test_owner_manager_question_is_recognized():
 
 
 def test_system_prompt_keeps_runtime_context_out_of_personality_file():
-    path = Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml"
     manager = PersonalityManager(path)
 
     prompt = manager.build_system_prompt(
@@ -115,7 +115,7 @@ def test_system_prompt_keeps_runtime_context_out_of_personality_file():
 
 
 def test_owner_identity_is_explicitly_verified_in_system_prompt():
-    path = Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml"
     manager = PersonalityManager(path)
 
     owner_prompt = manager.build_system_prompt(
@@ -133,7 +133,7 @@ def test_owner_identity_is_explicitly_verified_in_system_prompt():
 
 
 def test_intimate_mode_has_relationship_first_guidance():
-    path = Path(__file__).parents[1] / "app" / "personality" / "rumi.yaml"
+    path = Path(__file__).parents[1] / "rumi_helper" / "personality" / "rumi.yaml"
     prompt = PersonalityManager(path).build_system_prompt(
         "安全底座",
         context=PersonaContext(relationship="owner", mode="intimate"),  # type: ignore[arg-type]
@@ -328,7 +328,7 @@ async def test_owner_identity_question_uses_verified_identity(monkeypatch):
 def test_default_personality_path_falls_back_to_installed_package_data(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    manager = PersonalityManager("app/personality/rumi.yaml")
+    manager = PersonalityManager("rumi_helper/personality/rumi.yaml")
 
     assert manager.personality.name == "Rumi"
     assert manager.path.name == "rumi.yaml"

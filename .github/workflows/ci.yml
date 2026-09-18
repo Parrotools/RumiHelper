@@ -39,10 +39,10 @@ jobs:
 
       - name: Static checks
         run: |
-          python -m ruff check app tests ops/napcat/napcat_watchdog.py bot.py scripts/send_message.py
-          python -m bandit -r app scripts ops/napcat -q
+          python -m ruff check rumi_helper tests ops/napcat/napcat_watchdog.py bot.py scripts/send_message.py
+          python -m bandit -r rumi_helper scripts ops/napcat -q
           python -m pip_audit --local --skip-editable
-          python -m compileall -q app ops/napcat bot.py
+          python -m compileall -q rumi_helper ops/napcat bot.py
           python -m pip check
 
       - name: Tests
@@ -118,7 +118,9 @@ jobs:
           grep -q "Application shutdown complete" server.log
 
       - name: Build wheel
-        run: python -m pip wheel . --no-deps -w dist
+        run: |
+          rm -rf build dist *.egg-info
+          python -m pip wheel . --no-deps -w dist
 
       - name: Verify wheel runtime assets
         run: |
@@ -131,16 +133,22 @@ jobs:
               names = set(archive.namelist())
 
           required = {
-              "bot.py",
-              "app/personality/luna.yaml",
-              "app/personality/rumi.yaml",
-              "app/prompts/agent.txt",
-              "app/prompts/chat.txt",
-              "app/prompts/webpage_summary.txt",
+              "rumi_helper/cli.py",
+              "rumi_helper/personality/luna.yaml",
+              "rumi_helper/personality/rumi.yaml",
+              "rumi_helper/prompts/agent.txt",
+              "rumi_helper/prompts/chat.txt",
+              "rumi_helper/prompts/webpage_summary.txt",
           }
           missing = required - names
           if missing:
               raise SystemExit(f"wheel missing runtime files: {sorted(missing)}")
+
+          legacy = sorted(name for name in names if name.startswith("app/"))
+          if legacy:
+              raise SystemExit(f"wheel contains legacy app package: {legacy[:10]}")
+          if "bot.py" in names:
+              raise SystemExit("wheel unexpectedly contains source-tree bot.py wrapper")
 
           entry_points = [
               name for name in names
@@ -150,9 +158,9 @@ jobs:
               raise SystemExit("wheel does not contain exactly one entry_points.txt")
           with zipfile.ZipFile(wheel) as archive:
               text = archive.read(entry_points[0]).decode()
-          if "rumi-helper = bot:main" not in text:
+          if "rumi-helper = rumi_helper.cli:main" not in text:
               raise SystemExit("rumi-helper console entry point missing")
-          if "rumi-doctor = app.doctor:main" not in text:
+          if "rumi-doctor = rumi_helper.doctor:main" not in text:
               raise SystemExit("rumi-doctor console entry point missing")
           PY
 
@@ -168,8 +176,8 @@ jobs:
           env             DRIVER='~fastapi'             HOST=127.0.0.1             PORT=18081             DATABASE_PATH="$tmp/bot.db"             LLM_BASE_URL=http://127.0.0.1:9/v1             LLM_API_KEY=''             ADMIN_QQ_IDS=''             OWNER_QQ_ID=''             ONEBOT_ACCESS_TOKEN=smoke-token             GITHUB_CHECK_CRON=''             GITHUB_DIGEST_CRON=''             DAILY_REPORT_CRON=''             ENABLE_PLAYWRIGHT=false             rumi-doctor
 
           python - <<'PY'
-          import bot
+          import rumi_helper.cli as cli
 
-          paths = {route.path for route in bot.driver.server_app.routes}
+          paths = {route.path for route in cli.driver.server_app.routes}
           assert {"/livez", "/readyz", "/healthz"} <= paths
           PY

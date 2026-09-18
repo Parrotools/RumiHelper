@@ -4,9 +4,9 @@ import sqlite3
 import aiosqlite
 import pytest
 
-import app.database.db as db_module
-from app.database.db import Database
-from app.database.models import SCHEMA
+import rumi_helper.database.db as db_module
+from rumi_helper.database.db import Database
+from rumi_helper.database.models import SCHEMA
 
 
 async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):

@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.plugins.web_summary import _fetch_document
-from app.security.ssrf import SSRFBlockedError
-from app.services.web.fetcher import (
+from rumi_helper.plugins.web_summary import _fetch_document
+from rumi_helper.security.ssrf import SSRFBlockedError
+from rumi_helper.services.web.fetcher import (
     PageTooLargeError,
     TooManyRedirectsError,
     UnsupportedContentTypeError,

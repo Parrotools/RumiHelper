@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.database.db import Database
-from app.services.health import HealthService, format_status
+from rumi_helper.database.db import Database
+from rumi_helper.services.health import HealthService, format_status
 
 
 @pytest.fixture

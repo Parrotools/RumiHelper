@@ -5,21 +5,21 @@ from datetime import UTC
 import httpx
 import pytest
 
-from app.database.db import Database
-from app.services.github.client import (
+from rumi_helper.database.db import Database
+from rumi_helper.services.github.client import (
     GitHubAPIError,
     GitHubClient,
     GitHubRateLimitError,
     parse_snapshot_payload,
 )
-from app.services.github.tracker import (
+from rumi_helper.services.github.tracker import (
     GitHubTracker,
     GitHubTrackerError,
     compare_snapshots,
     format_github_digest,
     parse_repo_url,
 )
-from app.services.notifications import NotificationSettingsService
+from rumi_helper.services.notifications import NotificationSettingsService
 
 
 @pytest.fixture
@@ -127,6 +127,20 @@ async def test_github_client_reports_rate_limit():
         await client.aclose()
 
 
+async def test_github_http_error_does_not_echo_response_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="super-secret-github-echo")
+
+    client = GitHubClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(GitHubAPIError) as exc_info:
+            await client.get_repository("OpenAI", "openai-python")
+        assert str(exc_info.value) == "GitHub API HTTP 500"
+        assert "super-secret-github-echo" not in str(exc_info.value)
+    finally:
+        await client.aclose()
+
+
 async def test_github_client_wraps_invalid_json_response():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not json")
@@ -162,7 +176,7 @@ class FakeGitHubClient:
 
 
 def _snapshot(sha: str, stars: int = 1):
-    from app.services.github.models import GitHubSnapshot
+    from rumi_helper.services.github.models import GitHubSnapshot
 
     return GitHubSnapshot(
         stars=stars,
@@ -283,7 +297,7 @@ def test_format_github_digest_handles_empty_repository_list():
 
 
 def test_parse_github_command():
-    from app.plugins.github import parse_github_command, parse_github_digest_command
+    from rumi_helper.plugins.github import parse_github_command, parse_github_digest_command
 
     assert parse_github_command("/github add https://github.com/OpenAI/openai-python") == (
         "add",

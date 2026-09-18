@@ -2,10 +2,10 @@ from datetime import date
 
 import pytest
 
-from app.database.db import Database
-from app.services.github.models import GitHubSnapshot
-from app.services.notifications import NotificationSettingsService
-from app.services.report import ReportService
+from rumi_helper.database.db import Database
+from rumi_helper.services.github.models import GitHubSnapshot
+from rumi_helper.services.notifications import NotificationSettingsService
+from rumi_helper.services.report import ReportService
 
 
 @pytest.fixture

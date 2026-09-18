@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from app.database.db import Database
+from rumi_helper.database.db import Database
 
 
 @pytest.fixture

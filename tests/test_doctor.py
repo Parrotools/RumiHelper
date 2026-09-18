@@ -1,8 +1,8 @@
 import os
 import socket
 
-from app.config import Settings
-from app.doctor import main, run_checks
+from rumi_helper.config import Settings
+from rumi_helper.doctor import main, run_checks
 
 
 def _free_port() -> int:

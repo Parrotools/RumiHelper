@@ -1,6 +1,10 @@
 import pytest
 
-from app.services.qq.broadcast_parser import BroadcastFormatError, parse_broadcast_command, parse_targets
+from rumi_helper.services.qq.broadcast_parser import (
+    BroadcastFormatError,
+    parse_broadcast_command,
+    parse_targets,
+)
 
 
 def test_parse_valid():

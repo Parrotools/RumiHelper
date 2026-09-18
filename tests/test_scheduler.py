@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.database.db import Database
-from app.plugins.scheduler import parse_notification_command
-from app.services.notifications import NotificationSettingsService
-from app.services.scheduler import (
+from rumi_helper.database.db import Database
+from rumi_helper.plugins.scheduler import parse_notification_command
+from rumi_helper.services.notifications import NotificationSettingsService
+from rumi_helper.services.scheduler import (
     SchedulerService,
     SchedulerValidationError,
     parse_group_schedule_command,

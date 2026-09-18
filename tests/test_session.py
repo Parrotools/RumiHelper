@@ -3,8 +3,8 @@ import sqlite3
 
 import pytest
 
-from app.database.db import Database
-from app.services.session.manager import SessionManager
+from rumi_helper.database.db import Database
+from rumi_helper.services.session.manager import SessionManager
 
 
 @pytest.fixture

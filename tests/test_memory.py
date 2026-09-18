@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.database.db import Database
-from app.plugins import ai_chat
-from app.services.memory import MemoryService
+from rumi_helper.database.db import Database
+from rumi_helper.plugins import ai_chat
+from rumi_helper.services.memory import MemoryService
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ async def test_memory_context_is_marked_as_data(db):
 
 
 def test_parse_remember_command():
-    from app.plugins.memory import parse_remember_command
+    from rumi_helper.plugins.memory import parse_remember_command
 
     assert parse_remember_command("/remember preference -- 喜欢研究 HPC") == ("preference", "喜欢研究 HPC")
     assert parse_remember_command("/remember -- 默认作为事实") == ("fact", "默认作为事实")
@@ -55,7 +55,7 @@ def test_parse_remember_command():
 
 @pytest.mark.asyncio
 async def test_remember_rule_does_not_match_longer_command_name():
-    from app.plugins import memory as memory_plugin
+    from rumi_helper.plugins import memory as memory_plugin
 
     event = SimpleNamespace(
         user_id="20000",

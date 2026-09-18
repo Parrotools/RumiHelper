@@ -2,7 +2,7 @@ import ipaddress
 
 import pytest
 
-from app.security.ssrf import (
+from rumi_helper.security.ssrf import (
     SSRFBlockedError,
     assert_url_safe,
     check_ips,
@@ -71,7 +71,7 @@ async def test_assert_url_safe_blocks_localhost():
 
 async def test_assert_url_safe_dns_resolves_to_private(monkeypatch):
     # 模拟 nip.io 类攻击：域名解析到内网 IP
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     async def fake_resolve(host):
         return [ipaddress.ip_address("192.168.1.1")]
@@ -82,7 +82,7 @@ async def test_assert_url_safe_dns_resolves_to_private(monkeypatch):
 
 
 async def test_assert_url_safe_public_ok(monkeypatch):
-    from app.security import ssrf
+    from rumi_helper.security import ssrf
 
     async def fake_resolve(host):
         return [ipaddress.ip_address("93.184.216.34")]

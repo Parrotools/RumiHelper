@@ -32,11 +32,11 @@ NapCatQQ                    ← 只负责 QQ 协议 ↔ OneBot 11 转换
    ▼
 NoneBot2 (FastAPI 驱动, ws://127.0.0.1:8080/onebot/v11/ws)
    │
-   ├─ app/personality/    YAML 人格配置与加载
-   ├─ app/plugins/        事件路由：ai_chat / agent / web_summary / memory / scheduler / github / report / broadcast / admin / group_feedback
-   ├─ app/services/       业务层：LLM Gateway、Agent Harness、网页管道、会话、记忆、Scheduler、GitHub、Report、MessageDispatcher、群聊反馈设置
-   ├─ app/security/       权限、SSRF、Prompt Injection 防御
-   └─ app/database/       SQLite (aiosqlite)：db.py 管连接/migration，repositories/ 按领域拆分 sessions / messages / memories / scheduled_tasks / 群聊反馈 / GitHub / outbound SQL
+   ├─ rumi_helper/personality/    YAML 人格配置与加载
+   ├─ rumi_helper/plugins/        事件路由：ai_chat / agent / web_summary / memory / scheduler / github / report / broadcast / admin / group_feedback
+   ├─ rumi_helper/services/       业务层：LLM Gateway、Agent Harness、网页管道、会话、记忆、Scheduler、GitHub、Report、MessageDispatcher、群聊反馈设置
+   ├─ rumi_helper/security/       权限、SSRF、Prompt Injection 防御
+   └─ rumi_helper/database/       SQLite (aiosqlite)：db.py 管连接/migration，repositories/ 按领域拆分 sessions / messages / memories / scheduled_tasks / 群聊反馈 / GitHub / outbound SQL
 ```
 
 ## 环境要求
@@ -104,7 +104,7 @@ cp .env.example .env      # Windows: copy .env.example .env
 | `ONEBOT_ACCESS_TOKEN` | 自定一个随机字符串，**必须与 NapCat 侧填的完全一致** |
 | `LLM_API_KEY` | 你的 LLM API Key |
 | `LLM_BASE_URL` / `LLM_MODEL` | 按厂商填，如 GLM：`https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash` |
-| `PERSONALITY_FILE` | 人格 YAML 文件路径，默认 `app/personality/rumi.yaml` |
+| `PERSONALITY_FILE` | 人格 YAML 文件路径，默认 `rumi_helper/personality/rumi.yaml` |
 | `OWNER_QQ_ID` | 主人的真实 QQ 号；只按此 ID 识别主人，不按昵称猜测（留空且只有一个管理员时回退到该 ID） |
 | `OWNER_NAME` | 主人称呼，默认 `Parrotools` |
 | `AGENT_TOOL_CALLING_ENABLED` | 是否启用自然语言工具操作，默认 `true` |
