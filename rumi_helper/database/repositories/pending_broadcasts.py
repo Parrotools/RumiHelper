@@ -77,6 +77,15 @@ class PendingBroadcastRepository:
             await self.conn.commit()
             return cursor.rowcount > 0
 
+    async def recover_executing_broadcasts(self) -> int:
+        """Mark broadcasts abandoned by a previous process as failed without resending."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE pending_broadcasts SET status = ? WHERE status = ?",
+            (_PENDING_FAILED, _PENDING_EXECUTING),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount
+
     async def finish_pending(self, pending_id: int, status: str) -> bool:
         """Move a pending broadcast into a valid terminal state."""
         previous = {

@@ -94,6 +94,14 @@ class AgentActionRepository:
             pending["status"] = "executing"
             return pending
 
+    async def recover_executing_agent_actions(self) -> int:
+        """Mark actions abandoned by a previous process as failed without retrying them."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE pending_agent_actions SET status = 'failed' WHERE status = 'executing'"
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount
+
     async def finish_pending_agent_action(self, action_id: int, status: str) -> bool:
         allowed_from = {
             "confirmed": "executing",

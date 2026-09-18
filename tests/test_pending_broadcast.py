@@ -95,3 +95,31 @@ async def test_concurrent_replacement_leaves_only_one_active(db):
     )
     assert [row["status"] for row in rows].count("active") == 1
     assert [row["status"] for row in rows].count("cancelled") == 1
+
+
+async def test_recover_executing_broadcasts_marks_only_inflight_failed(db):
+    executing_id = await db.create_pending_broadcast(
+        "admin1",
+        [{"type": "user", "id": "123"}],
+        "first",
+        ttl_seconds=300,
+    )
+    assert await db.claim_pending(executing_id) is True
+
+    active_id = await db.create_pending_broadcast(
+        "admin2",
+        [{"type": "user", "id": "456"}],
+        "second",
+        ttl_seconds=300,
+    )
+
+    assert await db.recover_executing_broadcasts() == 1
+
+    rows = await db.fetchall(
+        "SELECT id, status FROM pending_broadcasts ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {"id": executing_id, "status": "failed"},
+        {"id": active_id, "status": "active"},
+    ]

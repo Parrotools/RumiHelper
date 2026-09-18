@@ -155,3 +155,76 @@ async def test_concurrent_init_runtime_builds_one_instance(tmp_path, monkeypatch
     assert fake_llm.closed is True
     assert fake_github_client.closed is True
     assert fake_fetcher.closed is True
+
+
+@pytest.mark.asyncio
+async def test_init_runtime_marks_stale_executing_actions_failed(tmp_path, monkeypatch):
+    database_path = str(tmp_path / "recover-runtime.db")
+    seed = Database(database_path)
+    await seed.connect()
+    action_id = await seed.create_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "memory_save",
+        "{}",
+        "save",
+        "9999-01-01T00:00:00+00:00",
+    )
+    claimed = await seed.claim_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "2000-01-01T00:00:00+00:00",
+    )
+    assert claimed is not None and claimed["id"] == action_id
+
+    broadcast_id = await seed.create_pending_broadcast(
+        "admin-1",
+        [{"type": "user", "id": "123"}],
+        "hello",
+        ttl_seconds=300,
+    )
+    assert await seed.claim_pending(broadcast_id) is True
+    await seed.close()
+
+    settings = Settings(
+        database_path=database_path,
+        github_check_cron="",
+        github_digest_cron="",
+        daily_report_cron="",
+        enable_playwright=False,
+    )
+    fake_llm = ClosableDependency()
+    fake_github_client = ClosableDependency()
+    fake_fetcher = ClosableDependency()
+
+    monkeypatch.setattr(runtime_module, "_runtime", None)
+    monkeypatch.setattr(runtime_module, "_runtime_lock", asyncio.Lock())
+    monkeypatch.setattr(runtime_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        runtime_module,
+        "OpenAICompatibleProvider",
+        lambda **_kwargs: fake_llm,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "GitHubClient",
+        lambda **_kwargs: fake_github_client,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "WebFetcher",
+        lambda **_kwargs: fake_fetcher,
+    )
+
+    runtime = await runtime_module.init_runtime()
+    try:
+        assert await runtime.db.fetchone(
+            "SELECT status FROM pending_agent_actions WHERE id = ?",
+            (action_id,),
+        ) == {"status": "failed"}
+        assert await runtime.db.fetchone(
+            "SELECT status FROM pending_broadcasts WHERE id = ?",
+            (broadcast_id,),
+        ) == {"status": "failed"}
+    finally:
+        await runtime_module.close_runtime()

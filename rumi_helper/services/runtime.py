@@ -87,6 +87,15 @@ async def _init_runtime_unlocked() -> Runtime:
         await db.connect()
         stack.push_async_callback(db.close)
 
+        recovered_agent_actions = await db.recover_executing_agent_actions()
+        recovered_broadcasts = await db.recover_executing_broadcasts()
+        if recovered_agent_actions or recovered_broadcasts:
+            logging.getLogger(__name__).warning(
+                "启动恢复遗留执行状态 agent_actions=%s broadcasts=%s；已标记为 failed，未自动重试",
+                recovered_agent_actions,
+                recovered_broadcasts,
+            )
+
         personality = PersonalityManager(settings.personality_file)
 
         llm = OpenAICompatibleProvider(

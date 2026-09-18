@@ -99,3 +99,18 @@ def test_check_ips_raises():
 def test_validate_url_rejects_userinfo_credentials():
     with pytest.raises(SSRFBlockedError):
         validate_url("https://user:password@example.com/private")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://2130706433/",
+        "http://0177.0.0.1/",
+        "http://0x7f000001/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://[fe80::1%25lo0]/",
+    ],
+)
+async def test_noncanonical_private_ip_forms_are_blocked(url):
+    with pytest.raises(SSRFBlockedError):
+        await assert_url_safe(url)
