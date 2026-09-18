@@ -12,6 +12,7 @@ import ipaddress
 import httpx
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
+DEFAULT_DNS_TIMEOUT_SECONDS = 10.0
 
 
 class SSRFBlockedError(Exception):
@@ -64,17 +65,29 @@ def check_ips(ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address]) -> None:
 
 async def resolve_url_safe(
     url: str,
+    *,
+    dns_timeout: float = DEFAULT_DNS_TIMEOUT_SECONDS,
 ) -> tuple[httpx.URL, list[ipaddress.IPv4Address | ipaddress.IPv6Address]]:
     """返回已完成 scheme/DNS/IP 校验的 URL 和解析结果。"""
     parsed = validate_url(url)
-    ips = await resolve_host(parsed.host)
+    try:
+        ips = await asyncio.wait_for(
+            resolve_host(parsed.host),
+            timeout=max(0.1, float(dns_timeout)),
+        )
+    except TimeoutError as e:
+        raise SSRFBlockedError(f"域名解析超时：{parsed.host}") from e
     if not ips:
         raise SSRFBlockedError(f"域名没有任何解析结果：{parsed.host}")
     check_ips(ips)
     return parsed, ips
 
 
-async def assert_url_safe(url: str) -> httpx.URL:
+async def assert_url_safe(
+    url: str,
+    *,
+    dns_timeout: float = DEFAULT_DNS_TIMEOUT_SECONDS,
+) -> httpx.URL:
     """scheme 校验 + DNS 解析 + IP 校验。抓取每一跳前都必须调用。"""
-    parsed, _ips = await resolve_url_safe(url)
+    parsed, _ips = await resolve_url_safe(url, dns_timeout=dns_timeout)
     return parsed

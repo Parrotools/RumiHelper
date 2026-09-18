@@ -84,6 +84,7 @@ class WebFetcher:
     ):
         self._max_bytes = max_bytes
         self._max_redirects = max_redirects
+        self._dns_timeout = max(0.1, float(connect_timeout))
         self._cache_ttl = max(0.0, cache_ttl)
         self._cache: OrderedDict[str, tuple[float, FetchResult]] = OrderedDict()
         self._inflight: dict[str, asyncio.Task[FetchResult]] = {}
@@ -178,7 +179,10 @@ class WebFetcher:
         while True:
             # 每一跳都重新解析并校验，并把实际 TCP 连接固定到本次已校验的
             # 公网 IP；Host/SNI 仍使用原域名，避免 DNS rebinding 的 TOCTOU。
-            parsed, ips = await resolve_url_safe(current)
+            parsed, ips = await resolve_url_safe(
+                current,
+                dns_timeout=self._dns_timeout,
+            )
             host = parsed.host
             host_header = f"[{host}]" if ":" in host else host
             if parsed.port is not None:
@@ -272,6 +276,7 @@ class PlaywrightFetcher:
     ):
         self._max_bytes = max_bytes
         self._timeout_ms = int(navigation_timeout * 1000)
+        self._dns_timeout = max(0.1, min(float(navigation_timeout), 10.0))
         self._proxy_url = WebFetcher._normalize_proxy_url(proxy_url)
 
     def _playwright_proxy_settings(self) -> dict[str, str] | None:
@@ -288,7 +293,10 @@ class PlaywrightFetcher:
         return settings
 
     async def fetch(self, url: str) -> FetchResult:
-        await assert_url_safe(url)  # Playwright 一样要过 SSRF 检查
+        await assert_url_safe(
+            url,
+            dns_timeout=self._dns_timeout,
+        )  # Playwright 一样要过 SSRF 检查
         try:
             from playwright.async_api import Error as PlaywrightError
             from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -312,7 +320,10 @@ class PlaywrightFetcher:
                         request_url = str(request.url)
                         if request_url.startswith(("http://", "https://")):
                             try:
-                                await assert_url_safe(request_url)
+                                await assert_url_safe(
+                                    request_url,
+                                    dns_timeout=self._dns_timeout,
+                                )
                             except SSRFBlockedError as exc:
                                 blocked_error = exc
                                 await route.abort()
@@ -333,7 +344,10 @@ class PlaywrightFetcher:
                     if blocked_error is not None:
                         raise blocked_error
                     final_url = page.url
-                    await assert_url_safe(final_url)
+                    await assert_url_safe(
+                        final_url,
+                        dns_timeout=self._dns_timeout,
+                    )
                     html = await page.content()
                 finally:
                     await browser.close()

@@ -7,6 +7,7 @@ from rumi_helper.security.ssrf import (
     assert_url_safe,
     check_ips,
     is_ip_allowed,
+    resolve_url_safe,
     validate_url,
 )
 
@@ -89,6 +90,22 @@ async def test_assert_url_safe_public_ok(monkeypatch):
 
     monkeypatch.setattr(ssrf, "resolve_host", fake_resolve)
     assert (await assert_url_safe("https://example.com/")).host == "example.com"
+
+
+async def test_dns_resolution_timeout_is_bounded(monkeypatch):
+    from rumi_helper.security import ssrf
+
+    async def slow_resolve(_host: str):
+        await __import__("asyncio").sleep(60)
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    monkeypatch.setattr(ssrf, "resolve_host", slow_resolve)
+
+    with pytest.raises(SSRFBlockedError, match="域名解析超时"):
+        await resolve_url_safe(
+            "https://example.com/",
+            dns_timeout=0.01,
+        )
 
 
 def test_check_ips_raises():

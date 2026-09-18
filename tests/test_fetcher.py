@@ -177,7 +177,7 @@ async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
 
     checked: list[str] = []
 
-    async def fake_assert_url_safe(url: str):
+    async def fake_assert_url_safe(url: str, **_kwargs):
         checked.append(url)
         if url.startswith("http://127.0.0.1"):
             raise SSRFBlockedError()
@@ -230,7 +230,7 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright", playwright)
     monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
 
-    async def allow_url(_url: str):
+    async def allow_url(_url: str, **_kwargs):
         return None
 
     monkeypatch.setattr("rumi_helper.services.web.fetcher.assert_url_safe", allow_url)
@@ -402,7 +402,7 @@ async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright", playwright)
     monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
 
-    async def allow_url(_url: str):
+    async def allow_url(_url: str, **_kwargs):
         return None
 
     monkeypatch.setattr(
