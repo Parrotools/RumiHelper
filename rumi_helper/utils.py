@@ -20,17 +20,25 @@ class ReplyGate:
         interval = 1.0 / rate_limit_per_second
         async with self._lock:
             now = time.monotonic()
-            delay = max(0.0, self._next_send_at - now)
-            self._next_send_at = max(now, self._next_send_at) + interval
-        if delay:
-            await asyncio.sleep(delay)
+            scheduled_at = max(now, self._next_send_at)
+            delay = max(0.0, scheduled_at - now)
+            if delay:
+                await asyncio.sleep(delay)
+            # Only reserve the next slot after the wait actually completes.
+            # A cancelled waiter must not leave a phantom reservation behind.
+            self._next_send_at = max(scheduled_at, time.monotonic()) + interval
 
 
 def truncate_for_qq(text: str, limit: int = QQ_TEXT_SAFE_LIMIT) -> str:
-    """超长回复截断，避免超出 QQ 单条消息上限导致发送失败。"""
+    """超长回复截断；正文和提示后缀合计不超过单条消息上限。"""
+    if limit <= 0:
+        return ""
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n\n……（内容过长已截断，原文共 {len(text)} 字符）"
+    suffix = f"\n\n……（内容过长已截断，原文共 {len(text)} 字符）"
+    if len(suffix) >= limit:
+        return suffix[:limit]
+    return text[: limit - len(suffix)] + suffix
 
 
 def local_reply_delay(runtime: Any, message: str) -> float:
@@ -68,7 +76,7 @@ async def send_reply(matcher: Any, runtime: Any, message: str) -> None:
         except AttributeError:
             pass
     await gate.wait_for_slot(max(0.0, rate))
-    await matcher.send(message)
+    await matcher.send(truncate_for_qq(str(message)))
 
 
 async def send_local_reply(matcher: Any, runtime: Any, message: str) -> None:
