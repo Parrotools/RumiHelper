@@ -337,6 +337,82 @@ async def test_scheduled_check_rolls_back_snapshot_if_outbox_insert_fails(db):
     assert dispatcher.wake_calls == 1
 
 
+async def test_concurrent_scheduled_checks_queue_change_only_once(tmp_path):
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierDatabase(Database):
+        sync_latest = False
+
+        async def fetch_latest_github_snapshot(self, repo_id: int):
+            nonlocal barrier_count
+            row = await super().fetch_latest_github_snapshot(repo_id)
+            if self.sync_latest:
+                barrier_count += 1
+                if barrier_count >= 2:
+                    barrier_ready.set()
+                await barrier_ready.wait()
+            return row
+
+    path = str(tmp_path / "github-race.db")
+    first_db = BarrierDatabase(path)
+    second_db = BarrierDatabase(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        initial = GitHubTracker(first_db, FakeGitHubClient(_snapshot("first")))
+        repo = await initial.add_repository(
+            "user-1",
+            "https://github.com/OpenAI/openai-python",
+        )
+        await first_db.insert_github_snapshot(repo["id"], _snapshot("first").to_dict())
+        await first_db.upsert_github_notification(
+            repo["id"],
+            "user",
+            "user-1",
+            True,
+        )
+        await NotificationSettingsService(first_db).set(
+            "user-1",
+            github_notify=True,
+        )
+
+        first_db.sync_latest = True
+        second_db.sync_latest = True
+        first_dispatcher = FakeDispatcher()
+        second_dispatcher = FakeDispatcher()
+        first_tracker = GitHubTracker(
+            first_db,
+            FakeGitHubClient(_snapshot("second", stars=2)),
+            first_dispatcher,
+            NotificationSettingsService(first_db),
+        )
+        second_tracker = GitHubTracker(
+            second_db,
+            FakeGitHubClient(_snapshot("second", stars=2)),
+            second_dispatcher,
+            NotificationSettingsService(second_db),
+        )
+
+        await asyncio.gather(
+            first_tracker.run_scheduled_check({}),
+            second_tracker.run_scheduled_check({}),
+        )
+
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM github_snapshots",
+            (),
+        ) == {"count": 2}
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 1}
+        assert first_dispatcher.wake_calls + second_dispatcher.wake_calls == 1
+    finally:
+        await first_db.close()
+        await second_db.close()
+
+
 async def test_scheduled_digest_sends_latest_commit_to_all_configured_users(db):
     dispatcher = FakeDispatcher()
     tracker = GitHubTracker(

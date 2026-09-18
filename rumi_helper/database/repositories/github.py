@@ -116,11 +116,40 @@ class GitHubRepository:
         snapshot: dict,
         deliveries: list[dict],
         max_attempts: int,
-    ) -> int:
-        """Atomically advance the GitHub snapshot and queue every derived notification."""
+        expected_previous_id: int,
+    ) -> int | None:
+        """CAS the latest snapshot, then queue every derived notification atomically."""
         async with self.operation():
             try:
-                snapshot_id = await self._insert_github_snapshot_unlocked(repo_id, snapshot)
+                async with self.conn.execute(
+                    "INSERT INTO github_snapshots "
+                    "(repo_id, stars, forks, watchers, commits_count, latest_commit_sha, latest_commit_message, "
+                    "latest_commit_author, latest_commit_time, latest_release, open_issues_count) "
+                    "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? "
+                    "WHERE COALESCE(("
+                    "  SELECT MAX(id) FROM github_snapshots WHERE repo_id = ?"
+                    "), 0) = ?",
+                    (
+                        repo_id,
+                        snapshot["stars"],
+                        snapshot["forks"],
+                        snapshot["watchers"],
+                        snapshot["commits_count"],
+                        snapshot["latest_commit_sha"],
+                        snapshot["latest_commit_message"],
+                        snapshot["latest_commit_author"],
+                        snapshot["latest_commit_time"],
+                        snapshot["latest_release"],
+                        snapshot["open_issues_count"],
+                        repo_id,
+                        int(expected_previous_id),
+                    ),
+                ) as cursor:
+                    if cursor.rowcount != 1:
+                        await self.conn.commit()
+                        return None
+                    snapshot_id = int(cursor.lastrowid)
+
                 if deliveries:
                     next_attempt_at = _now()
                     await self.conn.executemany(

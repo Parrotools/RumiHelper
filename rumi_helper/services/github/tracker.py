@@ -199,13 +199,15 @@ class GitHubTracker:
                     ]
 
             if deliveries:
-                await self._db.insert_github_snapshot_and_outbound(
+                expected_previous_id = int(previous["id"]) if previous is not None else 0
+                snapshot_id = await self._db.insert_github_snapshot_and_outbound(
                     repo_id,
                     snapshot.to_dict(),
                     deliveries,
                     self._outbound_max_attempts,
+                    expected_previous_id,
                 )
-                if self._dispatcher is not None:
+                if snapshot_id is not None and self._dispatcher is not None:
                     self._dispatcher.notify_queue_changed()
             else:
                 await self._db.insert_github_snapshot(repo_id, snapshot.to_dict())
