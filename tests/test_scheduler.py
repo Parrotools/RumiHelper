@@ -301,6 +301,42 @@ async def test_stop_waits_for_inflight_task(db):
     assert scheduler.is_running is False
 
 
+async def test_stop_cancels_inflight_task_after_shutdown_timeout(db):
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def stuck_task(_task: dict) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        shutdown_timeout_seconds=0.1,
+    )
+    scheduler.register_handler("stuck", stuck_task)
+    task_id = await scheduler.create_task(
+        "owner",
+        "stuck",
+        {},
+        cron_expression="0 * * * *",
+    )
+    running = asyncio.create_task(scheduler.run_task(task_id))
+    await entered.wait()
+
+    await scheduler.stop()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert cancelled.is_set()
+    assert running.cancelled()
+    assert not scheduler._active_runs
+
+
 async def test_concurrent_notification_updates_do_not_overwrite_each_other(tmp_path):
     class YieldingSettingsDatabase(Database):
         async def fetch_notification_settings(self, user_id: str):

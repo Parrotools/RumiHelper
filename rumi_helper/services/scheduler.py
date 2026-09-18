@@ -43,6 +43,7 @@ class SchedulerService:
         dispatcher: MessageDispatcher,
         timezone_name: str = "UTC",
         llm: LLMProvider | None = None,
+        shutdown_timeout_seconds: float = 10.0,
     ):
         try:
             self._timezone = ZoneInfo(timezone_name)
@@ -54,6 +55,7 @@ class SchedulerService:
         self._notifications = NotificationSettingsService(db)
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._started = False
+        self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
@@ -135,7 +137,18 @@ class SchedulerService:
             if task is not current and not task.done()
         ]
         if active:
-            await asyncio.gather(*active, return_exceptions=True)
+            _done, pending = await asyncio.wait(
+                active,
+                timeout=self._shutdown_timeout_seconds,
+            )
+            if pending:
+                logger.warning(
+                    "Scheduler 关闭等待超时，取消 %s 个仍在运行的任务",
+                    len(pending),
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
 
     async def create_reminder(
         self,
