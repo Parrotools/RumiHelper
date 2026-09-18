@@ -1,12 +1,21 @@
 import os
+import socket
 
 from app.config import Settings
 from app.doctor import main, run_checks
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _settings(tmp_path, **overrides):
     values = {
         "_env_file": None,
+        "host": "127.0.0.1",
+        "port": _free_port(),
         "database_path": str(tmp_path / "data" / "bot.db"),
         "scheduler_timezone": "UTC",
         "github_check_cron": "",
@@ -26,8 +35,11 @@ def test_doctor_accepts_safe_local_configuration_with_warnings(tmp_path):
     statuses = _statuses(checks)
 
     assert "FAIL" not in statuses.values()
+    assert statuses["bind_available"] == "PASS"
     assert statuses["onebot_token"] == "WARN"
     assert statuses["llm_api_key"] == "WARN"
+    assert statuses["onebot_exposure"] == "WARN"
+    assert statuses["llm_transport"] == "PASS"
     assert statuses["admin_ids"] == "WARN"
     assert statuses["owner_id"] == "WARN"
 
@@ -91,3 +103,73 @@ def test_doctor_database_path_checks_existing_file_permissions(tmp_path, monkeyp
         run_checks(_settings(tmp_path, database_path=str(database)))
     )
     assert statuses["database_path"] == "FAIL"
+
+def test_doctor_rejects_unauthenticated_non_loopback_bind(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                host="0.0.0.0",
+                onebot_access_token="",
+            )
+        )
+    )
+    assert statuses["onebot_exposure"] == "FAIL"
+
+
+def test_doctor_allows_authenticated_non_loopback_bind(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                host="0.0.0.0",
+                onebot_access_token="shared-secret",
+            )
+        )
+    )
+    assert statuses["onebot_exposure"] == "PASS"
+
+
+def test_doctor_rejects_remote_plain_http_llm_with_api_key(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                llm_base_url="http://llm.example.com/v1",
+                llm_api_key="secret",
+            )
+        )
+    )
+    assert statuses["llm_transport"] == "FAIL"
+
+
+def test_doctor_allows_loopback_http_llm_with_api_key(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                llm_base_url="http://127.0.0.1:8000/v1",
+                llm_api_key="secret",
+            )
+        )
+    )
+    assert statuses["llm_transport"] == "PASS"
+
+
+def test_doctor_rejects_occupied_bind_port(tmp_path):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = int(listener.getsockname()[1])
+
+        statuses = _statuses(
+            run_checks(
+                _settings(
+                    tmp_path,
+                    host="127.0.0.1",
+                    port=port,
+                )
+            )
+        )
+
+    assert statuses["bind_available"] == "FAIL"

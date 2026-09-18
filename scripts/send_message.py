@@ -9,10 +9,35 @@
     ONEBOT_ACCESS_TOKEN 与 NapCat 一致的 token
 """
 
+import ipaddress
 import os
 import sys
 
 import httpx
+
+
+def _is_loopback_host(host: str) -> bool:
+    value = str(host).strip().lower().strip("[]")
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_base_url(value: str, *, has_token: bool) -> str:
+    try:
+        url = httpx.URL(value)
+    except httpx.InvalidURL as exc:
+        raise ValueError("ONEBOT_HTTP_URL 无法解析") from exc
+    if url.scheme not in {"http", "https"} or not url.host:
+        raise ValueError("ONEBOT_HTTP_URL 必须是 http(s) URL")
+    if url.userinfo:
+        raise ValueError("ONEBOT_HTTP_URL 不允许包含用户名或密码")
+    if has_token and url.scheme == "http" and not _is_loopback_host(url.host):
+        raise ValueError("携带 ONEBOT_ACCESS_TOKEN 的远程地址必须使用 HTTPS")
+    return str(url).rstrip("/")
 
 
 def main() -> int:
@@ -27,8 +52,15 @@ def main() -> int:
         print("目标格式应为 user:QQ号 或 group:群号")
         return 2
 
-    base_url = os.environ.get("ONEBOT_HTTP_URL", "http://127.0.0.1:3000").rstrip("/")
     token = os.environ.get("ONEBOT_ACCESS_TOKEN", "")
+    try:
+        base_url = _validate_base_url(
+            os.environ.get("ONEBOT_HTTP_URL", "http://127.0.0.1:3000"),
+            has_token=bool(token),
+        )
+    except ValueError as exc:
+        print(f"配置错误：{exc}")
+        return 2
 
     if type_ == "user":
         action, params = "send_private_msg", {"user_id": int(target_id), "message": message}
@@ -41,13 +73,23 @@ def main() -> int:
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPError as e:
-        print(f"发送失败：{e}")
+        print(f"发送失败：{type(e).__name__}")
+        return 1
+    except ValueError:
+        print("发送失败：OneBot 返回了无效 JSON")
         return 1
 
+    if not isinstance(data, dict):
+        print("发送失败：OneBot 返回格式无效")
+        return 1
     if data.get("status") in ("ok", "async") or data.get("retcode") == 0:
         print(f"发送成功 message_id={data.get('data', {}).get('message_id')}")
         return 0
-    print(f"发送失败：{data}")
+    print(
+        "发送失败："
+        f"retcode={data.get('retcode', 'unknown')} "
+        f"status={data.get('status', 'unknown')}"
+    )
     return 1
 
 

@@ -5,8 +5,10 @@ This module intentionally avoids network calls and never prints credential value
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -34,8 +36,10 @@ def run_checks(settings: Settings) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
 
     checks.append(_check_bind(settings))
+    checks.append(_check_bind_availability(settings))
     checks.append(_check_llm_url(settings))
     checks.extend(_check_credentials(settings))
+    checks.extend(_check_transport_security(settings))
     checks.append(_check_personality(settings))
     checks.append(_check_prompts())
     checks.extend(_check_scheduler(settings))
@@ -51,6 +55,43 @@ def _check_bind(settings: Settings) -> DoctorCheck:
     if not 1 <= int(settings.port) <= 65535:
         return DoctorCheck("bind", "FAIL", "PORT 必须在 1..65535")
     return DoctorCheck("bind", "PASS", f"{settings.host}:{settings.port}")
+
+
+def _check_bind_availability(settings: Settings) -> DoctorCheck:
+    host = str(settings.host).strip()
+    port = int(settings.port)
+    if not host or not 1 <= port <= 65535:
+        return DoctorCheck("bind_available", "FAIL", "监听地址无效，无法检查端口")
+
+    try:
+        infos = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+    except OSError:
+        return DoctorCheck("bind_available", "FAIL", "HOST 无法解析为本机监听地址")
+
+    errors: list[OSError] = []
+    for family, socktype, proto, _canonname, sockaddr in infos:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(sockaddr)
+        except OSError as exc:
+            errors.append(exc)
+        else:
+            return DoctorCheck("bind_available", "PASS", f"{host}:{port} 可绑定")
+        finally:
+            sock.close()
+
+    detail = type(errors[-1]).__name__ if errors else "OSError"
+    return DoctorCheck(
+        "bind_available",
+        "FAIL",
+        f"{host}:{port} 无法绑定（{detail}，可能已被占用或无权限）",
+    )
 
 
 def _check_llm_url(settings: Settings) -> DoctorCheck:
@@ -92,6 +133,60 @@ def _check_credentials(settings: Settings) -> list[DoctorCheck]:
         checks.append(DoctorCheck("owner_id", "PASS", "已配置"))
     else:
         checks.append(DoctorCheck("owner_id", "WARN", "未解析到唯一主人；owner 身份功能将关闭"))
+    return checks
+
+
+def _is_loopback_host(host: str) -> bool:
+    value = str(host).strip().lower().strip("[]")
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+
+    if settings.onebot_access_token.strip():
+        checks.append(DoctorCheck("onebot_exposure", "PASS", "OneBot 鉴权已启用"))
+    elif _is_loopback_host(settings.host):
+        checks.append(
+            DoctorCheck(
+                "onebot_exposure",
+                "WARN",
+                "仅本机监听但未配置 OneBot token",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                "onebot_exposure",
+                "FAIL",
+                "非 loopback 监听时必须配置 ONEBOT_ACCESS_TOKEN",
+            )
+        )
+
+    try:
+        llm_url = httpx.URL(settings.llm_base_url)
+    except httpx.InvalidURL:
+        return checks
+    if (
+        settings.llm_api_key.strip()
+        and llm_url.scheme == "http"
+        and llm_url.host
+        and not _is_loopback_host(llm_url.host)
+    ):
+        checks.append(
+            DoctorCheck(
+                "llm_transport",
+                "FAIL",
+                "远程 LLM 使用 API Key 时必须使用 HTTPS",
+            )
+        )
+    else:
+        checks.append(DoctorCheck("llm_transport", "PASS", "传输配置可接受"))
     return checks
 
 

@@ -209,7 +209,7 @@ GITHUB_DIGEST_CRON=0 6,18 * * *
 
 只有管理员可以设置目标；清空目标后定时发送会自动关闭。修改 `.env` 中的时间后需要重启 Bot。
 
-主动发送也可以不经聊天窗口，用命令行（需 NapCat 开启 HTTP 服务端，环境变量 `ONEBOT_HTTP_URL` 指向其地址）：
+主动发送也可以不经聊天窗口，用命令行（需 NapCat 开启 HTTP 服务端，环境变量 `ONEBOT_HTTP_URL` 指向其地址）。脚本允许本机 loopback 使用 HTTP；如果配置了 `ONEBOT_ACCESS_TOKEN` 且目标不是 loopback，则要求使用 HTTPS，避免 token 明文传输：
 
 ```bash
 python scripts/send_message.py user:123456 "你好"

@@ -42,7 +42,7 @@ sudo systemctl enable --now qqbot.service
 sudo systemctl status qqbot.service
 ```
 
-如果部署目录不是 `/opt/RumiHelper`，先修改 unit 中的 `WorkingDirectory`、`ExecStartPre`、`ExecStart` 和 `ReadWritePaths`。`rumi-doctor` 只做本地配置、资源、cron、时区和文件权限检查，不连接 QQ/LLM，也不会输出 token/API Key；`WARN` 不阻止启动，`FAIL` 返回非零并让 systemd 拒绝启动。日志由 journald 收集，可用 `journalctl -u qqbot.service -f` 查看。
+如果部署目录不是 `/opt/RumiHelper`，先修改 unit 中的 `WorkingDirectory`、`ExecStartPre`、`ExecStart` 和 `ReadWritePaths`。如果把 `DATABASE_PATH` 改到 `/opt/RumiHelper/data` 之外，也必须把实际数据库目录加入 `ReadWritePaths`，否则 `ProtectSystem=strict` 会让 systemd 下的 Bot 无法创建或更新 SQLite/WAL 文件。`rumi-doctor` 只做离线检查，不连接 QQ/LLM，也不会输出 token/API Key；它会校验监听端口是否可绑定、本地资源、cron、时区、文件权限以及关键传输安全配置：端口已被占用、非 loopback 监听但未配置 `ONEBOT_ACCESS_TOKEN`、或携带 API Key 的远程 LLM 使用明文 HTTP，都会判为 `FAIL`。`WARN` 不阻止启动，`FAIL` 返回非零并让 systemd 拒绝启动。日志由 journald 收集，可用 `journalctl -u qqbot.service -f` 查看。
 
 ## NapCat OneBot 11
 
