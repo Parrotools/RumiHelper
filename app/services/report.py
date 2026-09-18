@@ -9,6 +9,7 @@ from app.database.db import Database
 from app.services.github.tracker import compare_snapshots
 from app.services.notifications import NotificationSettingsService
 from app.services.qq.dispatcher import MessageDispatcher
+from app.utils import truncate_for_qq
 
 
 class ReportError(ValueError):
@@ -60,6 +61,7 @@ class ReportService:
                     period_start,
                     period_end,
                     content,
+                    truncate_for_qq(content),
                     self._outbound_max_attempts,
                 )
             except Exception:
@@ -129,7 +131,7 @@ def _format_change(change: dict) -> str:
         return f'Commit：{change["message"]}（作者：{change["author"]}）'
     if change["type"] == "release":
         return f'Release：{change["to"]}'
-    labels = {"stars": "Star", "forks": "Fork", "issues": "开放 Issue"}
+    labels = {"stars": "Star", "forks": "Fork", "issues": "开放 Issue/PR"}
     return f'{labels[change["type"]]}：{change["from"]} → {change["to"]}'
 
 

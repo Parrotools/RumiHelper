@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -360,3 +360,55 @@ async def test_scheduled_content_history_keeps_only_latest_twenty(db):
         "SELECT COUNT(*) AS count FROM scheduled_content_history WHERE task_id = ?",
         (task_id,),
     ) == {"count": 20}
+
+
+async def test_restart_recovers_recent_one_time_misfire(db):
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    run_at = datetime.now(UTC) - timedelta(seconds=30)
+    task_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {"target_type": "user", "target_id": "user-1", "message": "recent"},
+        None,
+        run_at.isoformat(),
+    )
+    task = await db.fetch_scheduled_task(task_id)
+
+    assert scheduler._schedule(task) is True
+    assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is not None
+
+
+async def test_restart_drops_one_time_misfire_beyond_grace(db):
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    run_at = datetime.now(UTC) - timedelta(seconds=120)
+    task_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {"target_type": "user", "target_id": "user-1", "message": "stale"},
+        None,
+        run_at.isoformat(),
+    )
+    task = await db.fetch_scheduled_task(task_id)
+
+    assert scheduler._schedule(task) is False
+    assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is None
+
+
+async def test_start_refreshes_persisted_next_run_for_cron_task(db):
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    task_id = await db.create_scheduled_task(
+        "admin-1",
+        "group_message",
+        {"target_type": "group", "target_id": "30000", "message": "hello"},
+        "0 * * * *",
+        "2000-01-01T00:00:00+00:00",
+    )
+    before = datetime.now(UTC)
+
+    await scheduler.start()
+    try:
+        refreshed = await db.fetch_scheduled_task(task_id)
+        next_run = datetime.fromisoformat(refreshed["next_run"])
+        assert next_run > before
+    finally:
+        await scheduler.stop()

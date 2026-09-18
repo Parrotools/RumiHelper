@@ -117,7 +117,7 @@
 /report
 ```
 
-`add` 后才能 `check` 或 `watch`。自动检查由 `GITHUB_CHECK_CRON` 驱动，检测到最新 commit、Star、Fork、开放 Issue 或 Release 变化时才通知。群通知目标 `group:群号` 仅管理员可配置。
+`add` 后才能 `check` 或 `watch`。自动检查由 `GITHUB_CHECK_CRON` 驱动，检测到最新 commit、Star、Fork、开放 Issue/PR 或 Release 变化时才通知。群通知目标 `group:群号` 仅管理员可配置。
 
 也可以直接用自然语言描述 GitHub 操作：
 

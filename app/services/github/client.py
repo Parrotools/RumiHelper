@@ -32,7 +32,7 @@ def parse_snapshot_payload(
     return GitHubSnapshot(
         stars=int(repository.get("stargazers_count", 0)),
         forks=int(repository.get("forks_count", 0)),
-        watchers=int(repository.get("watchers_count", repository.get("subscribers_count", 0))),
+        watchers=int(repository.get("subscribers_count", repository.get("watchers_count", 0))),
         commits_count=int(commits_count),
         latest_commit_sha=str(commit.get("sha") or ""),
         latest_commit_message=str(commit_data.get("message") or ""),

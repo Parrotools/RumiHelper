@@ -214,7 +214,7 @@ def format_check_result(result: dict) -> str:
         elif change["type"] == "release":
             lines.append(f'发布版本：{change["to"]}')
         else:
-            labels = {"stars": "Star", "forks": "Fork", "issues": "开放 Issue"}
+            labels = {"stars": "Star", "forks": "Fork", "issues": "开放 Issue/PR"}
             lines.append(f'{labels[change["type"]]}：{change["from"]} → {change["to"]}')
     return "\n".join(lines)
 

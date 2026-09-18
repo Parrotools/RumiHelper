@@ -59,6 +59,7 @@ class ReportRepository:
         period_start: str,
         period_end: str,
         content: str,
+        delivery_content: str,
         max_attempts: int,
     ) -> tuple[int, bool]:
         """Atomically persist a report and enqueue its first delivery exactly once.
@@ -97,7 +98,12 @@ class ReportRepository:
                         "INSERT INTO outbound_messages "
                         "(target_type, target_id, content, max_attempts, next_attempt_at) "
                         "VALUES ('user', ?, ?, ?, ?)",
-                        (owner_id, content, max(1, int(max_attempts)), _now()),
+                        (
+                            owner_id,
+                            delivery_content,
+                            max(1, int(max_attempts)),
+                            _now(),
+                        ),
                     )
 
                 await self.conn.commit()

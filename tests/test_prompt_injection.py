@@ -79,4 +79,4 @@ async def test_summarizer_never_receives_dispatcher():
     # 模块不得导入 MessageDispatcher
     source = inspect.getsource(mod)
     assert "MessageDispatcher" not in source
-    assert "dispatcher" not in source.replace("dispatcher ", "").lower() or True
+    assert "dispatcher" not in source.lower()

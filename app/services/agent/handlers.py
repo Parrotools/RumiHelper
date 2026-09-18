@@ -47,7 +47,7 @@ async def github_info(runtime: Any, user_id: str, arguments: dict[str, Any], ses
     return (
         f"{ref.owner}/{ref.name}\n"
         f"Star：{info.get('stargazers_count', 0)}  Fork：{info.get('forks_count', 0)}\n"
-        f"开放 Issue：{info.get('open_issues_count', 0)}\n{info.get('html_url', ref.url)}"
+        f"开放 Issue/PR：{info.get('open_issues_count', 0)}\n{info.get('html_url', ref.url)}"
     )
 
 

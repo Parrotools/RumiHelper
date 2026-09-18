@@ -19,6 +19,7 @@ from app.services.qq.dispatcher import MessageDispatcher
 logger = logging.getLogger(__name__)
 
 TaskHandler = Callable[[dict], Awaitable[None]]
+MISFIRE_GRACE_SECONDS = 60
 NOTIFICATION_BY_TASK = {
     "reminder": "reminder_notify",
 }
@@ -174,8 +175,22 @@ class SchedulerService:
         if self._started:
             return
         for task in await self._db.fetch_enabled_scheduled_tasks():
+            if task["cron_expression"]:
+                next_run = self._next_cron_run(task["cron_expression"])
+                await self._db.update_scheduled_task_schedule(
+                    task["id"],
+                    task["cron_expression"],
+                    next_run.isoformat(),
+                    True,
+                )
+                task = {**task, "next_run": next_run.isoformat()}
             if not self._schedule(task):
-                await self._db.mark_scheduled_task_run(task["id"], datetime.now(UTC).isoformat(), None, False)
+                await self._db.mark_scheduled_task_run(
+                    task["id"],
+                    datetime.now(UTC).isoformat(),
+                    None,
+                    False,
+                )
         self._scheduler.start()
         self._started = True
 
@@ -415,8 +430,13 @@ class SchedulerService:
             trigger = CronTrigger.from_crontab(task["cron_expression"], timezone=self._timezone)
         else:
             run_at = self._parse_datetime(task["next_run"])
-            if run_at <= datetime.now(self._timezone):
-                return False
+            now = datetime.now(self._timezone)
+            if run_at <= now:
+                if (now - run_at).total_seconds() > MISFIRE_GRACE_SECONDS:
+                    return False
+                # Preserve the configured misfire grace across process restarts:
+                # APScheduler cannot see the old in-memory DateTrigger anymore.
+                run_at = now
             trigger = DateTrigger(run_date=run_at, timezone=self._timezone)
         self._scheduler.add_job(
             self.run_task,
@@ -426,7 +446,7 @@ class SchedulerService:
             replace_existing=True,
             coalesce=True,
             max_instances=1,
-            misfire_grace_time=60,
+            misfire_grace_time=MISFIRE_GRACE_SECONDS,
         )
         return True
 

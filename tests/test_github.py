@@ -57,6 +57,7 @@ def test_parse_github_api_payload():
             "stargazers_count": 10,
             "forks_count": 2,
             "subscribers_count": 3,
+            "watchers_count": 99,
             "open_issues_count": 4,
         },
         {
