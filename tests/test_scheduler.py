@@ -474,42 +474,46 @@ async def test_stop_is_bounded_when_task_swallows_first_cancel(db):
 
 
 async def test_concurrent_notification_updates_do_not_overwrite_each_other(tmp_path):
-    class YieldingSettingsDatabase(Database):
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierSettingsDatabase(Database):
+        def __init__(self, path: str):
+            super().__init__(path)
+            self._sync_first_fetch = True
+
         async def fetch_notification_settings(self, user_id: str):
+            nonlocal barrier_count
             row = await super().fetch_notification_settings(user_id)
-            await asyncio.sleep(0)
+            if self._sync_first_fetch:
+                self._sync_first_fetch = False
+                barrier_count += 1
+                if barrier_count >= 2:
+                    barrier_ready.set()
+                await barrier_ready.wait()
             return row
 
-        async def save_notification_settings(
-            self,
-            user_id: str,
-            github_notify: bool,
-            daily_report: bool,
-            reminder_notify: bool,
-        ) -> None:
-            await asyncio.sleep(0)
-            await super().save_notification_settings(
-                user_id,
-                github_notify,
-                daily_report,
-                reminder_notify,
-            )
-
-    database = YieldingSettingsDatabase(str(tmp_path / "notification-race.db"))
-    await database.connect()
+    path = str(tmp_path / "notification-race.db")
+    first_db = BarrierSettingsDatabase(path)
+    second_db = BarrierSettingsDatabase(path)
+    await first_db.connect()
+    await second_db.connect()
     try:
-        service = NotificationSettingsService(database)
+        first = NotificationSettingsService(first_db)
+        second = NotificationSettingsService(second_db)
+
         await asyncio.gather(
-            service.set("user-1", github_notify=True),
-            service.set("user-1", daily_report=True),
+            first.set("user-1", github_notify=True),
+            second.set("user-1", daily_report=True),
         )
-        stored = await service.get("user-1")
+        stored = await first.get("user-1")
 
         assert stored["github_notify"] is True
         assert stored["daily_report"] is True
         assert stored["reminder_notify"] is False
     finally:
-        await database.close()
+        await first_db.close()
+        await second_db.close()
 
 
 async def test_scheduled_content_history_keeps_only_latest_twenty(db):
