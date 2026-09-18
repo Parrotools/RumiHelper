@@ -145,3 +145,33 @@ async def test_group_memory_list_refuses_to_expose_private_memories(monkeypatch)
     assert calls == []
     assert sent == ["为了隐私，长期记忆只能在私聊中查看。"]
     assert "private secret" not in sent[0]
+
+
+async def test_memory_retention_is_bounded_per_user(db):
+    service = MemoryService(db, max_memories_per_user=3)
+
+    for index in range(5):
+        await service.save(
+            "user-1",
+            "fact",
+            f"memory-{index}",
+            importance=0.9,
+        )
+    await service.save(
+        "user-2",
+        "fact",
+        "other-user",
+        importance=0.9,
+    )
+
+    rows = await db.fetchall(
+        "SELECT user_id, content FROM memories ORDER BY id",
+        (),
+    )
+
+    assert rows == [
+        {"user_id": "user-1", "content": "memory-2"},
+        {"user_id": "user-1", "content": "memory-3"},
+        {"user_id": "user-1", "content": "memory-4"},
+        {"user_id": "user-2", "content": "other-user"},
+    ]

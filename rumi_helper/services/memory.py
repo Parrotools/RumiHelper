@@ -6,6 +6,7 @@ VALID_MEMORY_TYPES = frozenset({"preference", "project", "fact", "github", "sche
 MIN_IMPORTANCE = 0.5
 MAX_MEMORY_CHARS = 2000
 DEFAULT_CONTEXT_LIMIT = 5
+MAX_MEMORIES_PER_USER = 200
 
 
 class MemoryValidationError(ValueError):
@@ -13,8 +14,13 @@ class MemoryValidationError(ValueError):
 
 
 class MemoryService:
-    def __init__(self, db: Database):
+    def __init__(
+        self,
+        db: Database,
+        max_memories_per_user: int = MAX_MEMORIES_PER_USER,
+    ):
         self._db = db
+        self._max_memories_per_user = max(1, int(max_memories_per_user))
 
     async def save(self, user_id: str, memory_type: str, content: str, *, importance: float = 0.8) -> int | None:
         user_id = str(user_id).strip()
@@ -32,7 +38,13 @@ class MemoryService:
             raise MemoryValidationError("importance 必须在 0 到 1 之间")
         if importance < MIN_IMPORTANCE:
             return None
-        return await self._db.insert_memory(user_id, memory_type, content, importance)
+        return await self._db.insert_memory(
+            user_id,
+            memory_type,
+            content,
+            importance,
+            self._max_memories_per_user,
+        )
 
     async def list_for_context(self, user_id: str, limit: int = DEFAULT_CONTEXT_LIMIT) -> list[dict]:
         limit = max(0, min(int(limit), 20))
