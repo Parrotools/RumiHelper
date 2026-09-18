@@ -173,7 +173,11 @@ async def _fetch_document(runtime: Runtime, url: str):
 async def _summarize_one(matcher_: Matcher, runtime: Runtime, url: str, notice: bool = False) -> None:
     logger.info("网页总结 url=%s", safe_url_for_log(url))
     if notice:
-        await send_local_reply(matcher_, runtime, f"正在读取网页：{url}")
+        await send_local_reply(
+            matcher_,
+            runtime,
+            f"正在读取网页：{safe_url_for_log(url)}",
+        )
     try:
         async with runtime.web_semaphore:  # 并发限制，防止慢网页拖死 Bot
             doc = await _fetch_document(runtime, url)

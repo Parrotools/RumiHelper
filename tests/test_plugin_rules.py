@@ -301,6 +301,44 @@ def test_truncate_for_qq():
     assert "已截断" in out
 
 
+async def test_summary_notice_redacts_url_credentials_and_query(monkeypatch):
+    notices: list[str] = []
+
+    async def fake_fetch_document(runtime, url):
+        return object()
+
+    class FakeSummarizer:
+        async def summarize(self, doc):
+            return "summary"
+
+    async def fake_send_local_reply(matcher, runtime, message):
+        notices.append(message)
+
+    async def fake_send_reply(matcher, runtime, message):
+        return None
+
+    runtime = SimpleNamespace(
+        web_semaphore=asyncio.Semaphore(1),
+        summarizer=FakeSummarizer(),
+    )
+
+    monkeypatch.setattr(web_summary, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(web_summary, "send_local_reply", fake_send_local_reply)
+    monkeypatch.setattr(web_summary, "send_reply", fake_send_reply)
+
+    await web_summary._summarize_one(
+        SimpleNamespace(),
+        runtime,
+        "https://user:secret@example.com/private/path?token=abc123#fragment",
+        notice=True,
+    )
+
+    assert notices == ["正在读取网页：https://example.com/…"]
+    assert "secret" not in notices[0]
+    assert "token" not in notices[0]
+    assert "private/path" not in notices[0]
+
+
 async def test_summary_success_uses_shared_reply_gate(monkeypatch):
     sent: list[str] = []
 
