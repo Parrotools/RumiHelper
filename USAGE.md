@@ -85,7 +85,7 @@
 /remind cron:0 8 * * * -- 早上好
 ```
 
-时间使用 `SCHEDULER_TIMEZONE` 配置的时区，默认是 `Asia/Shanghai`。一次性提醒执行后自动失效，cron 提醒会持续执行。
+时间使用 `SCHEDULER_TIMEZONE` 配置的时区，默认是 `Asia/Shanghai`。一次性提醒执行后自动失效，cron 提醒会持续执行；每个用户最多同时保留 `MAX_ACTIVE_REMINDERS_PER_USER` 个 active reminder（默认 50）。
 
 管理员可以创建定时群发固定消息。群号只能写成 `group:群号`，时间使用 `SCHEDULER_TIMEZONE` 配置的时区：
 
@@ -117,7 +117,7 @@
 /report
 ```
 
-`add` 后才能 `check` 或 `watch`。自动检查由 `GITHUB_CHECK_CRON` 驱动，检测到最新 commit、Star、Fork、开放 Issue/PR 或 Release 变化时才通知。群通知目标 `group:群号` 仅管理员可配置。
+`add` 后才能 `check` 或 `watch`。每个用户最多监控 `MAX_GITHUB_REPOSITORIES_PER_USER` 个仓库（默认 50）；自动检查由 `GITHUB_CHECK_CRON` 驱动，检测到最新 commit、Star、Fork、开放 Issue/PR 或 Release 变化时才通知。群通知目标 `group:群号` 仅管理员可配置。
 
 也可以直接用自然语言描述 GitHub 操作：
 
@@ -308,6 +308,8 @@ user:789012
 | `BROADCAST_CONFIRM_TTL_SECONDS` | 300 | 确认有效期 |
 | `MAX_CONCURRENT_WEB_TASKS` / `_LLM_TASKS` | 3 / 5 | 并发上限 |
 | `SCHEDULER_TIMEZONE` | Asia/Shanghai | 定时任务时区 |
+| `MAX_ACTIVE_REMINDERS_PER_USER` | 50 | 每用户最多同时存在的 active reminder 数量 |
+| `MAX_GITHUB_REPOSITORIES_PER_USER` | 50 | 每用户最多监控的 GitHub 仓库数量 |
 | `GITHUB_TOKEN` | — | GitHub API Token，可选，用于提高速率上限 |
 | `GITHUB_CHECK_CRON` | `0 * * * *` | GitHub 自动检查频率，留空关闭 |
 | `DAILY_REPORT_CRON` | `0 23 * * *` | 日报生成频率，留空关闭 |

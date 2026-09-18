@@ -5,20 +5,48 @@ from rumi_helper.database.repositories.common import _now
 
 class GitHubRepository:
     async def insert_github_repository(
-        self, owner_id: str, repo_owner: str, repo_name: str, repo_url: str
-    ) -> int:
+        self,
+        owner_id: str,
+        repo_owner: str,
+        repo_name: str,
+        repo_url: str,
+        max_per_owner: int = 50,
+    ) -> int | None:
         async with self.operation():
-            await self.conn.execute(
-                "INSERT INTO github_repositories (owner_id, repo_owner, repo_name, repo_url) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(owner_id, repo_owner, repo_name) DO UPDATE SET repo_url = excluded.repo_url",
-                (owner_id, repo_owner, repo_name, repo_url),
-            )
-            await self.conn.commit()
-            row = await self.fetchone(
-                "SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
-                (owner_id, repo_owner, repo_name),
-            )
-            return int(row["id"])
+            try:
+                await self.conn.execute("BEGIN IMMEDIATE")
+                row = await self.fetchone(
+                    "SELECT id FROM github_repositories "
+                    "WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+                    (owner_id, repo_owner, repo_name),
+                )
+                if row is not None:
+                    await self.conn.execute(
+                        "UPDATE github_repositories SET repo_url = ? WHERE id = ?",
+                        (repo_url, int(row["id"])),
+                    )
+                    await self.conn.commit()
+                    return int(row["id"])
+
+                count = await self.fetchone(
+                    "SELECT COUNT(*) AS count FROM github_repositories WHERE owner_id = ?",
+                    (owner_id,),
+                )
+                if int(count["count"]) >= max(1, int(max_per_owner)):
+                    await self.conn.commit()
+                    return None
+
+                async with self.conn.execute(
+                    "INSERT INTO github_repositories "
+                    "(owner_id, repo_owner, repo_name, repo_url) VALUES (?, ?, ?, ?)",
+                    (owner_id, repo_owner, repo_name, repo_url),
+                ) as cursor:
+                    repo_id = int(cursor.lastrowid)
+                await self.conn.commit()
+                return repo_id
+            except Exception:
+                await self.conn.rollback()
+                raise
 
     async def fetch_github_repository(
         self, owner_id: str, repo_owner: str, repo_name: str

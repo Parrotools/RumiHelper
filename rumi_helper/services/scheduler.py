@@ -45,6 +45,7 @@ class SchedulerService:
         llm: LLMProvider | None = None,
         shutdown_timeout_seconds: float = 10.0,
         outbound_max_attempts: int = 3,
+        max_active_reminders_per_user: int = 50,
     ):
         try:
             self._timezone = ZoneInfo(timezone_name)
@@ -59,6 +60,10 @@ class SchedulerService:
         self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self._shutdown_cancel_grace_seconds = min(1.0, self._shutdown_timeout_seconds)
         self._outbound_max_attempts = max(1, int(outbound_max_attempts))
+        self._max_active_reminders_per_user = max(
+            1,
+            int(max_active_reminders_per_user),
+        )
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
@@ -261,8 +266,22 @@ class SchedulerService:
             next_run = run_at
 
         task_id = await self._db.create_scheduled_task(
-            str(owner_id), task_type, payload, cron_expression, next_run.isoformat()
+            str(owner_id),
+            task_type,
+            payload,
+            cron_expression,
+            next_run.isoformat(),
+            (
+                self._max_active_reminders_per_user
+                if task_type == "reminder"
+                else None
+            ),
         )
+        if task_id is None:
+            raise SchedulerValidationError(
+                "每个用户最多同时保留 "
+                f"{self._max_active_reminders_per_user} 个 active reminder"
+            )
         if self._started:
             task = await self._db.fetch_scheduled_task(task_id)
             if task is not None:

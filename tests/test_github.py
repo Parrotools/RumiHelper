@@ -685,3 +685,61 @@ async def test_concurrent_checks_of_same_repo_use_latest_snapshot(db):
     changed = [bool(result["changes"]) for result in (first, second)]
     assert changed.count(True) == 1
     assert changed.count(False) == 1
+
+
+async def test_github_repository_limit_allows_upsert_but_rejects_new_repo(db):
+    tracker = GitHubTracker(
+        db,
+        FakeGitHubClient(_snapshot("first")),
+        max_repositories_per_user=2,
+    )
+
+    await tracker.add_repository("user-1", "https://github.com/OpenAI/openai-python")
+    await tracker.add_repository("user-1", "https://github.com/pallets/flask")
+
+    # Re-adding an existing repository is an upsert and must not consume quota.
+    existing = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python/",
+    )
+    assert existing["repo_name"] == "openai-python"
+
+    with pytest.raises(GitHubTrackerError, match="最多监控 2 个"):
+        await tracker.add_repository("user-1", "https://github.com/psf/requests")
+
+    assert len(await tracker.list_repositories("user-1")) == 2
+
+
+async def test_concurrent_processes_cannot_exceed_github_repository_limit(tmp_path):
+    path = str(tmp_path / "github-repo-limit-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        first = GitHubTracker(
+            first_db,
+            FakeGitHubClient(_snapshot("first")),
+            max_repositories_per_user=1,
+        )
+        second = GitHubTracker(
+            second_db,
+            FakeGitHubClient(_snapshot("first")),
+            max_repositories_per_user=1,
+        )
+
+        results = await asyncio.gather(
+            first.add_repository("user-1", "https://github.com/OpenAI/openai-python"),
+            second.add_repository("user-1", "https://github.com/pallets/flask"),
+            return_exceptions=True,
+        )
+
+        assert sum(isinstance(item, dict) for item in results) == 1
+        assert sum(isinstance(item, GitHubTrackerError) for item in results) == 1
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM github_repositories WHERE owner_id = ?",
+            ("user-1",),
+        ) == {"count": 1}
+    finally:
+        await first_db.close()
+        await second_db.close()

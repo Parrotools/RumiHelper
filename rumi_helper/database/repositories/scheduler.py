@@ -13,15 +13,39 @@ class SchedulerRepository:
         payload: dict,
         cron_expression: str | None,
         next_run: str,
-    ) -> int:
+        max_active_for_owner: int | None = None,
+    ) -> int | None:
         async with self.operation():
-            cursor = await self.conn.execute(
-                "INSERT INTO scheduled_tasks "
-                "(owner_id, task_type, payload, cron_expression, next_run) VALUES (?, ?, ?, ?, ?)",
-                (owner_id, task_type, json.dumps(payload, ensure_ascii=False), cron_expression, next_run),
-            )
-            await self.conn.commit()
-            return int(cursor.lastrowid)
+            try:
+                await self.conn.execute("BEGIN IMMEDIATE")
+                if max_active_for_owner is not None:
+                    row = await self.fetchone(
+                        "SELECT COUNT(*) AS count FROM scheduled_tasks "
+                        "WHERE owner_id = ? AND task_type = ? AND enabled = 1",
+                        (owner_id, task_type),
+                    )
+                    if int(row["count"]) >= max(1, int(max_active_for_owner)):
+                        await self.conn.commit()
+                        return None
+
+                async with self.conn.execute(
+                    "INSERT INTO scheduled_tasks "
+                    "(owner_id, task_type, payload, cron_expression, next_run) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        owner_id,
+                        task_type,
+                        json.dumps(payload, ensure_ascii=False),
+                        cron_expression,
+                        next_run,
+                    ),
+                ) as cursor:
+                    task_id = int(cursor.lastrowid)
+                await self.conn.commit()
+                return task_id
+            except Exception:
+                await self.conn.rollback()
+                raise
 
     async def ensure_system_scheduled_task(
         self,

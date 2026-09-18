@@ -136,6 +136,7 @@ async def _init_runtime_unlocked() -> Runtime:
             notifications,
             timezone_name=settings.scheduler_timezone,
             outbound_max_attempts=settings.outbound_max_attempts,
+            max_repositories_per_user=settings.max_github_repositories_per_user,
         )
         report = ReportService(
             db,
@@ -150,6 +151,7 @@ async def _init_runtime_unlocked() -> Runtime:
             timezone_name=settings.scheduler_timezone,
             llm=llm,
             outbound_max_attempts=settings.outbound_max_attempts,
+            max_active_reminders_per_user=settings.max_active_reminders_per_user,
         )
         stack.push_async_callback(scheduler.stop)
         scheduler.register_handler("github_check", github.run_scheduled_check)

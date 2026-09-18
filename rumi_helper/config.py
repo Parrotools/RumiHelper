@@ -77,6 +77,8 @@ class Settings(BaseSettings):
 
     # 定时任务
     scheduler_timezone: str = "Asia/Shanghai"
+    max_active_reminders_per_user: int = 50
+    max_github_repositories_per_user: int = 50
     github_token: str = ""
     github_check_cron: str = "0 * * * *"
     github_digest_cron: str = "0 6,18 * * *"

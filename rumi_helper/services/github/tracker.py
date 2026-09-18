@@ -101,6 +101,7 @@ class GitHubTracker:
         notifications=None,
         timezone_name: str = "Asia/Shanghai",
         outbound_max_attempts: int = 3,
+        max_repositories_per_user: int = 50,
     ):
         self._db = db
         self._client = client
@@ -108,6 +109,7 @@ class GitHubTracker:
         self._notifications = notifications or NotificationSettingsService(db)
         self._timezone = ZoneInfo(timezone_name)
         self._outbound_max_attempts = max(1, int(outbound_max_attempts))
+        self._max_repositories_per_user = max(1, int(max_repositories_per_user))
         self._repo_check_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -117,7 +119,17 @@ class GitHubTracker:
         if not owner_id:
             raise GitHubTrackerError("owner_id 不能为空")
         ref = parse_repo_url(url)
-        repo_id = await self._db.insert_github_repository(owner_id, ref.owner, ref.name, ref.url)
+        repo_id = await self._db.insert_github_repository(
+            owner_id,
+            ref.owner,
+            ref.name,
+            ref.url,
+            self._max_repositories_per_user,
+        )
+        if repo_id is None:
+            raise GitHubTrackerError(
+                f"每个用户最多监控 {self._max_repositories_per_user} 个 GitHub 仓库"
+            )
         row = await self._db.fetch_github_repository(str(owner_id), ref.owner, ref.name)
         return {**row, "id": repo_id}
 

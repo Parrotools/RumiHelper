@@ -235,7 +235,7 @@ ADMIN_QQ_IDS=111111,222222
 - **群发**：管理员专属 + 数量上限（默认 20）+ 限速（默认 1 条/秒）+ 预览确认（TTL 5 分钟、发起人本人可确认、仅可执行一次、重复下发自动作废旧任务）。
 - **敏感数据**：`.env` 已在 `.gitignore`；日志不输出 API Key，网页正文与发送内容截断后入库。
 - **优雅关闭**：Bot 停机时自动释放 LLM/抓取 HTTP 客户端与数据库连接。
-- **GitHub 监控**：使用 `GITHUB_CHECK_CRON` 周期检查；仅用户开启 `/notify github on` 后推送，GitHub Token 不写日志。
+- **GitHub 监控**：使用 `GITHUB_CHECK_CRON` 周期检查；仅用户开启 `/notify github on` 后推送，GitHub Token 不写日志；每用户监控仓库数量有上限，避免周期 API 调用无限增长。
 - **GitHub 定时汇总**：使用 `GITHUB_DIGEST_CRON` 周期获取全部已登记仓库的最新 commit，并发送给 `/github digest` 配置的用户或群；汇总包含 commit 时间、作者和消息。
 - **日报**：使用 `DAILY_REPORT_CRON` 触发；仅用户开启 `/notify report on` 后发送，内容写入 `reports` 表。
 

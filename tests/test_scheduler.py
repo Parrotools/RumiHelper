@@ -68,6 +68,21 @@ def test_parse_one_time_and_cron_reminders():
     assert message == "早上好"
 
 
+
+
+def test_parse_reminder_rejects_oversized_message():
+    with pytest.raises(SchedulerValidationError, match="4000"):
+        parse_reminder_command(
+            "/remind 2030-01-02 08:30 -- " + ("x" * 4001)
+        )
+
+
+def test_parse_group_schedule_rejects_oversized_message():
+    with pytest.raises(SchedulerValidationError, match="4000"):
+        parse_group_schedule_command(
+            "/schedule group:123456 2030-01-02 08:30 -- " + ("x" * 4001)
+        )
+
 def test_parse_reminder_rejects_invalid_format():
     with pytest.raises(SchedulerValidationError):
         parse_reminder_command("/remind tomorrow -- 内容")
@@ -763,6 +778,79 @@ async def test_concurrent_processes_create_only_one_active_system_task(tmp_path)
         )
         assert len(rows) == 1
         assert rows[0]["enabled"] == 1
+    finally:
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_active_reminder_limit_releases_capacity_after_task_is_disabled(db):
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        max_active_reminders_per_user=2,
+    )
+    first = await scheduler.create_reminder(
+        "user-1",
+        "first",
+        run_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    await scheduler.create_reminder(
+        "user-1",
+        "second",
+        run_at=datetime.now(UTC) + timedelta(hours=2),
+    )
+
+    with pytest.raises(SchedulerValidationError, match="最多同时保留 2 个"):
+        await scheduler.create_reminder(
+            "user-1",
+            "third",
+            run_at=datetime.now(UTC) + timedelta(hours=3),
+        )
+
+    await db.update_scheduled_task_schedule(first, None, None, False)
+    third = await scheduler.create_reminder(
+        "user-1",
+        "third",
+        run_at=datetime.now(UTC) + timedelta(hours=3),
+    )
+    assert isinstance(third, int)
+
+
+async def test_concurrent_processes_cannot_exceed_active_reminder_limit(tmp_path):
+    path = str(tmp_path / "reminder-limit-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        first = SchedulerService(
+            first_db,
+            FakeDispatcher(),
+            timezone_name="UTC",
+            max_active_reminders_per_user=1,
+        )
+        second = SchedulerService(
+            second_db,
+            FakeDispatcher(),
+            timezone_name="UTC",
+            max_active_reminders_per_user=1,
+        )
+        run_at = datetime.now(UTC) + timedelta(hours=1)
+
+        results = await asyncio.gather(
+            first.create_reminder("user-1", "first", run_at=run_at),
+            second.create_reminder("user-1", "second", run_at=run_at),
+            return_exceptions=True,
+        )
+
+        assert sum(isinstance(item, int) for item in results) == 1
+        assert sum(isinstance(item, SchedulerValidationError) for item in results) == 1
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM scheduled_tasks "
+            "WHERE owner_id = ? AND task_type = 'reminder' AND enabled = 1",
+            ("user-1",),
+        ) == {"count": 1}
     finally:
         await first_db.close()
         await second_db.close()
