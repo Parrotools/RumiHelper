@@ -181,7 +181,7 @@ async def _load_reply(
         logger.warning(
             "获取引用消息失败 message_id={} error={}",
             message_id,
-            exc,
+            type(exc).__name__,
         )
         return reply, quoted_message
     return fetched, _object_field(fetched, "message")

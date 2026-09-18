@@ -144,13 +144,28 @@ async def test_reply_context_fetches_missing_content_by_message_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reply_context_fetch_failure_does_not_block_chat(monkeypatch):
+    logged: list[tuple[str, tuple]] = []
+
+    class FakeLogger:
+        def warning(self, message: str, *args) -> None:
+            logged.append((message, args))
+
     class FakeBot:
         async def call_api(self, action: str, **params):
-            raise RuntimeError("暂时不可用")
+            raise RuntimeError("secret-token=abc123 path=/private/internal")
 
     monkeypatch.setattr(ai_chat, "get_bot", lambda: FakeBot())
+    monkeypatch.setattr(ai_chat._message_utils, "logger", FakeLogger())
     event = _private_event(Message([MessageSegment.reply(42), "请解释"]))
 
     prompt = await ai_chat._with_reply_context(event, "请解释")
 
     assert prompt == "请解释"
+    assert logged == [
+        (
+            "获取引用消息失败 message_id={} error={}",
+            (42, "RuntimeError"),
+        )
+    ]
+    assert "secret-token" not in repr(logged)
+    assert "/private/internal" not in repr(logged)
