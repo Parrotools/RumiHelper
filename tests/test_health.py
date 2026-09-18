@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,19 @@ class HealthyDependency:
 class FailedDependency:
     async def check_health(self):
         raise RuntimeError("unavailable")
+
+
+class CountingDependency:
+    def __init__(self):
+        self.calls = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.release.set()
+
+    async def check_health(self):
+        self.calls += 1
+        self.entered.set()
+        await self.release.wait()
 
 
 async def test_health_reports_dependencies_counts_and_recent_error(db):
@@ -177,6 +191,71 @@ def test_admin_status_keeps_operational_diagnostics():
     assert "GitHub 监控：9" in rendered
     assert "Memory：11" in rendered
     assert "最近错误：send failed" in rendered
+
+
+async def test_readiness_cache_avoids_repeated_external_probe(db):
+    llm = CountingDependency()
+    health = HealthService(
+        db,
+        llm,
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        cache_ttl_seconds=60,
+    )
+
+    first = await health.check_readiness()
+    second = await health.check_readiness()
+
+    assert first == second
+    assert llm.calls == 1
+
+
+async def test_concurrent_readiness_requests_share_one_probe(db):
+    llm = CountingDependency()
+    llm.release.clear()
+    health = HealthService(
+        db,
+        llm,
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        cache_ttl_seconds=60,
+    )
+
+    first = asyncio.create_task(health.check_readiness())
+    second = asyncio.create_task(health.check_readiness())
+    await llm.entered.wait()
+    await asyncio.sleep(0)
+
+    assert llm.calls == 1
+    llm.release.set()
+
+    assert await first == await second
+    assert llm.calls == 1
+
+
+async def test_detailed_health_bypasses_public_probe_cache(db):
+    llm = CountingDependency()
+    github = CountingDependency()
+    health = HealthService(
+        db,
+        llm,
+        github,
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        cache_ttl_seconds=60,
+    )
+
+    public = await health.check(include_diagnostics=False)
+    detailed = await health.check(include_diagnostics=True)
+
+    assert public["ok"] is True
+    assert detailed["ok"] is True
+    assert "counts" not in public
+    assert "counts" in detailed
+    assert llm.calls == 2
+    assert github.calls == 2
 
 
 async def test_health_can_omit_operational_diagnostics(db):

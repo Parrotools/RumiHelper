@@ -1,7 +1,9 @@
 """运行依赖健康检查与安全状态汇总。"""
 
 import asyncio
+import copy
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from rumi_helper.database.db import Database
@@ -50,6 +52,7 @@ class HealthService:
         started_at: float,
         timeout: float = 3.0,
         check_qq: bool = False,
+        cache_ttl_seconds: float = 2.0,
     ):
         self._db = db
         self._llm = llm
@@ -58,9 +61,15 @@ class HealthService:
         self._started_at = started_at
         self._timeout = max(0.1, timeout)
         self._check_qq = check_qq
+        self._cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
+        self._probe_cache: dict[str, tuple[float, dict]] = {}
+        self._probe_inflight: dict[str, asyncio.Task[dict]] = {}
 
     async def check_readiness(self) -> dict:
-        """核心就绪检查：只看本地数据库、LLM 与 Scheduler，不受 QQ/GitHub 短暂波动影响。"""
+        """核心就绪检查：短缓存并合并并发 probe，避免健康检查放大外部调用。"""
+        return await self._cached_probe("readiness", self._check_readiness_uncached)
+
+    async def _check_readiness_uncached(self) -> dict:
         database, llm = await asyncio.gather(
             self._probe(self._database_probe),
             self._probe(self._llm.check_health),
@@ -75,6 +84,14 @@ class HealthService:
         }
 
     async def check(self, *, include_diagnostics: bool = True) -> dict:
+        if not include_diagnostics:
+            return await self._cached_probe(
+                "full",
+                lambda: self._check_uncached(include_diagnostics=False),
+            )
+        return await self._check_uncached(include_diagnostics=True)
+
+    async def _check_uncached(self, *, include_diagnostics: bool) -> dict:
         probes = [
             self._probe(self._database_probe),
             self._probe(self._llm.check_health),
@@ -98,6 +115,33 @@ class HealthService:
         if qq_results:
             result["qq"] = qq_results[0]
         return result
+
+    async def _cached_probe(
+        self,
+        key: str,
+        operation: Callable[[], Awaitable[dict]],
+    ) -> dict:
+        now = time.monotonic()
+        cached = self._probe_cache.get(key)
+        if cached is not None and now - cached[0] <= self._cache_ttl_seconds:
+            return copy.deepcopy(cached[1])
+
+        task = self._probe_inflight.get(key)
+        if task is None:
+            task = asyncio.create_task(operation())
+            self._probe_inflight[key] = task
+            task.add_done_callback(
+                lambda done, cache_key=key: self._forget_probe(cache_key, done)
+            )
+
+        result = await asyncio.shield(task)
+        if self._cache_ttl_seconds > 0:
+            self._probe_cache[key] = (time.monotonic(), copy.deepcopy(result))
+        return copy.deepcopy(result)
+
+    def _forget_probe(self, key: str, task: asyncio.Task[dict]) -> None:
+        if self._probe_inflight.get(key) is task:
+            self._probe_inflight.pop(key, None)
 
     async def _qq_probe(self) -> None:
         """检查 OneBot 是否连着一个在线的 QQ 账号，而不只检查进程是否存在。"""
