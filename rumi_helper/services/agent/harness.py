@@ -122,6 +122,9 @@ class AgentHarness:
                 return AgentResult(True, await tool.handler(runtime, user_id, arguments, session_key))
             except _SERVICE_ERRORS as exc:
                 return AgentResult(True, f"操作失败：{exc}")
+            except Exception:
+                logger.exception("agent read-only tool unexpected failure tool=%s", tool.name)
+                return AgentResult(True, "操作失败：内部错误，请稍后重试。")
 
         summary = summarize(tool.name, arguments)
         expires_at = _utc_now() + timedelta(seconds=self._confirmation_ttl_seconds)

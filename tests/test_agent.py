@@ -43,6 +43,12 @@ class FakeGitHub:
         self.watched.append((user_id, url, target))
 
 
+class CrashingGitHub(FakeGitHub):
+    async def list_repositories(self, user_id: str) -> list[dict]:
+        del user_id
+        raise RuntimeError("database path /secret/github.db failed")
+
+
 class FakeMemory:
     def __init__(self):
         self.saved: list[tuple[str, str, str]] = []
@@ -272,6 +278,30 @@ async def test_read_only_tool_runs_without_confirmation(db):
     assert result is not None and result.handled
     assert result.message == "你的 GitHub 仓库：\nOpenAI/openai-python"
     assert await db.fetchone("SELECT id FROM pending_agent_actions", ()) is None
+
+
+@pytest.mark.asyncio
+async def test_read_only_unexpected_error_is_redacted(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"github_list_repositories","arguments":{}}'),
+        CrashingGitHub(),
+    )
+    harness = AgentHarness()
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=_event(),
+        text="看看我的 GitHub 仓库列表",
+    )
+
+    assert result is not None and result.handled
+    assert result.message == "操作失败：内部错误，请稍后重试。"
+    assert "/secret/github.db" not in result.message
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM pending_agent_actions",
+        (),
+    ) == {"count": 0}
 
 
 @pytest.mark.asyncio
