@@ -1,7 +1,7 @@
 """日报查询命令。"""
 
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import MessageEvent
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 from nonebot.rule import Rule
 
 from rumi_helper.plugins.chat_message_utils import (
@@ -37,6 +37,13 @@ report_matcher = on_message(rule=Rule(_report_rule), priority=6, block=True)
 @report_matcher.handle()
 async def _handle_report(event: MessageEvent):
     runtime = get_runtime()
+    if isinstance(event, GroupMessageEvent):
+        await send_local_reply(
+            report_matcher,
+            runtime,
+            "为了隐私，日报只能在私聊中查看。",
+        )
+        return
     try:
         content = await runtime.report.build_daily_report(str(event.user_id))
     except ReportError as e:

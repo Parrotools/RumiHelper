@@ -343,6 +343,38 @@ async def test_agent_memory_list_refuses_to_expose_private_memories_in_group(db)
     assert "private secret" not in result.message
 
 
+
+
+@pytest.mark.asyncio
+async def test_agent_daily_report_refuses_to_expose_private_report_in_group(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"daily_report","arguments":{}}'),
+        FakeGitHub(),
+    )
+    calls: list[str] = []
+
+    class CountingReport(FakeReport):
+        async def build_daily_report(self, user_id: str) -> str:
+            calls.append(user_id)
+            return "private report body"
+
+    runtime.report = CountingReport()
+    harness = AgentHarness()
+    event = SimpleNamespace(user_id="user-1", group_id="30000")
+
+    result = await harness.try_handle(
+        runtime=runtime,
+        event=event,
+        text="查看我的日报",
+    )
+
+    assert result is not None and result.handled
+    assert result.message == "操作失败：为了隐私，日报只能在私聊中查看"
+    assert calls == []
+    assert "private report body" not in result.message
+
+
 @pytest.mark.asyncio
 async def test_notification_and_reminder_use_confirmation_and_existing_settings(db):
     llm = FakeLLM('{"action":"notification_set","arguments":{"name":"reminder","enabled":true}}')

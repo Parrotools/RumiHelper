@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from rumi_helper.services.github.tracker import format_check_result, parse_repo_url
 from rumi_helper.services.health import format_status
 from rumi_helper.services.qq.broadcast_parser import parse_targets
+from rumi_helper.services.report import ReportError
 from rumi_helper.services.scheduler import SchedulerValidationError, parse_reminder_command
 from rumi_helper.utils import truncate_for_qq
 
@@ -195,5 +196,7 @@ async def status(runtime: Any, user_id: str, arguments: dict[str, Any], session_
 
 
 async def daily_report(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del arguments, session_key
+    del arguments
+    if session_key.startswith("group:"):
+        raise ReportError("为了隐私，日报只能在私聊中查看")
     return truncate_for_qq(await runtime.report.build_daily_report(user_id))

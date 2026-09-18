@@ -179,3 +179,36 @@ async def test_daily_report_batch_rolls_back_all_users_if_second_enqueue_fails(d
         (),
     ) == {"count": 2}
     assert dispatcher.wake_calls == 1
+
+
+async def test_group_report_command_refuses_to_expose_private_report(monkeypatch):
+    from types import SimpleNamespace
+
+    from rumi_helper.plugins import report as report_plugin
+
+    calls: list[str] = []
+    sent: list[str] = []
+
+    class FakeReport:
+        async def build_daily_report(self, user_id: str) -> str:
+            calls.append(user_id)
+            return "private report body"
+
+    class FakeGroupEvent:
+        def __init__(self):
+            self.user_id = "20000"
+
+    runtime = SimpleNamespace(report=FakeReport())
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(report_plugin, "GroupMessageEvent", FakeGroupEvent)
+    monkeypatch.setattr(report_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(report_plugin, "send_local_reply", fake_send_local_reply)
+
+    await report_plugin._handle_report(FakeGroupEvent())
+
+    assert calls == []
+    assert sent == ["为了隐私，日报只能在私聊中查看。"]
+    assert "private report body" not in sent[0]
