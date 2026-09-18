@@ -41,6 +41,7 @@ jobs:
         run: |
           python -m ruff check app tests ops/napcat/napcat_watchdog.py bot.py scripts/send_message.py
           python -m bandit -r app scripts ops/napcat -q
+          python -m pip_audit --local --skip-editable
           python -m compileall -q app ops/napcat bot.py
           python -m pip check
 
