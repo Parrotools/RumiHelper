@@ -9,6 +9,7 @@ import logging
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from rumi_helper.config import Settings, get_settings
 from rumi_helper.database.db import Database
@@ -87,8 +88,13 @@ async def _init_runtime_unlocked() -> Runtime:
         await db.connect()
         stack.push_async_callback(db.close)
 
-        recovered_agent_actions = await db.recover_executing_agent_actions()
-        recovered_broadcasts = await db.recover_executing_broadcasts()
+        recovery_now = datetime.now(UTC)
+        recovered_agent_actions = await db.recover_executing_agent_actions(
+            recovery_now.isoformat()
+        )
+        recovered_broadcasts = await db.recover_executing_broadcasts(
+            recovery_now.strftime("%Y-%m-%d %H:%M:%S")
+        )
         if recovered_agent_actions or recovered_broadcasts:
             logging.getLogger(__name__).warning(
                 "启动恢复遗留执行状态 agent_actions=%s broadcasts=%s；已标记为 failed，未自动重试",

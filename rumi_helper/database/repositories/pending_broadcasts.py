@@ -77,11 +77,12 @@ class PendingBroadcastRepository:
             await self.conn.commit()
             return cursor.rowcount > 0
 
-    async def recover_executing_broadcasts(self) -> int:
-        """Mark broadcasts abandoned by a previous process as failed without resending."""
+    async def recover_executing_broadcasts(self, now: str) -> int:
+        """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_broadcasts SET status = ? WHERE status = ?",
-            (_PENDING_FAILED, _PENDING_EXECUTING),
+            "UPDATE pending_broadcasts SET status = ? "
+            "WHERE status = ? AND expires_at <= ?",
+            (_PENDING_FAILED, _PENDING_EXECUTING, str(now)),
         ) as cursor:
             await self.conn.commit()
             return cursor.rowcount

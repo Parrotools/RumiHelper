@@ -167,8 +167,8 @@ async def test_init_runtime_marks_stale_executing_actions_failed(tmp_path, monke
         "private:user-1",
         "memory_save",
         "{}",
-        "save",
-        "9999-01-01T00:00:00+00:00",
+        "expired",
+        "2001-01-01T00:00:00+00:00",
     )
     claimed = await seed.claim_pending_agent_action(
         "user-1",
@@ -176,14 +176,43 @@ async def test_init_runtime_marks_stale_executing_actions_failed(tmp_path, monke
         "2000-01-01T00:00:00+00:00",
     )
     assert claimed is not None and claimed["id"] == action_id
+    fresh_action_id = await seed.create_pending_agent_action(
+        "user-2",
+        "private:user-2",
+        "memory_save",
+        "{}",
+        "fresh",
+        "9999-01-01T00:00:00+00:00",
+    )
+    fresh_claimed = await seed.claim_pending_agent_action(
+        "user-2",
+        "private:user-2",
+        "2000-01-01T00:00:00+00:00",
+    )
+    assert fresh_claimed is not None and fresh_claimed["id"] == fresh_action_id
 
     broadcast_id = await seed.create_pending_broadcast(
         "admin-1",
         [{"type": "user", "id": "123"}],
-        "hello",
+        "expired",
         ttl_seconds=300,
     )
     assert await seed.claim_pending(broadcast_id) is True
+    await seed.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("2001-01-01 00:00:00", broadcast_id),
+    )
+    fresh_broadcast_id = await seed.create_pending_broadcast(
+        "admin-2",
+        [{"type": "user", "id": "456"}],
+        "fresh",
+        ttl_seconds=300,
+    )
+    assert await seed.claim_pending(fresh_broadcast_id) is True
+    await seed.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("9999-01-01 00:00:00", fresh_broadcast_id),
+    )
     await seed.close()
 
     settings = Settings(
@@ -226,5 +255,13 @@ async def test_init_runtime_marks_stale_executing_actions_failed(tmp_path, monke
             "SELECT status FROM pending_broadcasts WHERE id = ?",
             (broadcast_id,),
         ) == {"status": "failed"}
+        assert await runtime.db.fetchone(
+            "SELECT status FROM pending_agent_actions WHERE id = ?",
+            (fresh_action_id,),
+        ) == {"status": "executing"}
+        assert await runtime.db.fetchone(
+            "SELECT status FROM pending_broadcasts WHERE id = ?",
+            (fresh_broadcast_id,),
+        ) == {"status": "executing"}
     finally:
         await runtime_module.close_runtime()

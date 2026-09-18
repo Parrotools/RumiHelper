@@ -494,38 +494,58 @@ async def test_agent_cannot_clear_shared_group_session_as_non_admin(db):
 
 
 @pytest.mark.asyncio
-async def test_recover_executing_agent_actions_marks_only_inflight_failed(db):
-    executing_id = await db.create_pending_agent_action(
+async def test_recover_executing_agent_actions_only_fails_expired_executions(db):
+    expired_id = await db.create_pending_agent_action(
         "user-1",
         "private:user-1",
         "memory_save",
         "{}",
-        "save",
-        "9999-01-01T00:00:00+00:00",
+        "expired",
+        "2001-01-01T00:00:00+00:00",
     )
     claimed = await db.claim_pending_agent_action(
         "user-1",
         "private:user-1",
         "2000-01-01T00:00:00+00:00",
     )
-    assert claimed is not None and claimed["id"] == executing_id
+    assert claimed is not None and claimed["id"] == expired_id
 
     pending_id = await db.create_pending_agent_action(
         "user-2",
         "private:user-2",
         "memory_save",
         "{}",
-        "save-2",
+        "pending",
         "9999-01-01T00:00:00+00:00",
     )
+    fresh_id = await db.create_pending_agent_action(
+        "user-3",
+        "private:user-3",
+        "memory_save",
+        "{}",
+        "fresh",
+        "9999-01-01T00:00:00+00:00",
+    )
+    fresh_claim = await db.claim_pending_agent_action(
+        "user-3",
+        "private:user-3",
+        "2000-01-01T00:00:00+00:00",
+    )
+    assert fresh_claim is not None and fresh_claim["id"] == fresh_id
 
-    assert await db.recover_executing_agent_actions() == 1
+    assert (
+        await db.recover_executing_agent_actions(
+            "2002-01-01T00:00:00+00:00"
+        )
+        == 1
+    )
 
     rows = await db.fetchall(
         "SELECT id, status FROM pending_agent_actions ORDER BY id",
         (),
     )
     assert rows == [
-        {"id": executing_id, "status": "failed"},
+        {"id": expired_id, "status": "failed"},
         {"id": pending_id, "status": "pending"},
+        {"id": fresh_id, "status": "executing"},
     ]

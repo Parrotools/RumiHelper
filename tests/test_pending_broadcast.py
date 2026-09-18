@@ -97,29 +97,45 @@ async def test_concurrent_replacement_leaves_only_one_active(db):
     assert [row["status"] for row in rows].count("cancelled") == 1
 
 
-async def test_recover_executing_broadcasts_marks_only_inflight_failed(db):
-    executing_id = await db.create_pending_broadcast(
+async def test_recover_executing_broadcasts_only_fails_expired_executions(db):
+    expired_id = await db.create_pending_broadcast(
         "admin1",
         [{"type": "user", "id": "123"}],
-        "first",
+        "expired",
         ttl_seconds=300,
     )
-    assert await db.claim_pending(executing_id) is True
+    assert await db.claim_pending(expired_id) is True
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("2001-01-01 00:00:00", expired_id),
+    )
 
     active_id = await db.create_pending_broadcast(
         "admin2",
         [{"type": "user", "id": "456"}],
-        "second",
+        "active",
         ttl_seconds=300,
     )
+    fresh_id = await db.create_pending_broadcast(
+        "admin3",
+        [{"type": "user", "id": "789"}],
+        "fresh",
+        ttl_seconds=300,
+    )
+    assert await db.claim_pending(fresh_id) is True
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("9999-01-01 00:00:00", fresh_id),
+    )
 
-    assert await db.recover_executing_broadcasts() == 1
+    assert await db.recover_executing_broadcasts("2002-01-01 00:00:00") == 1
 
     rows = await db.fetchall(
         "SELECT id, status FROM pending_broadcasts ORDER BY id",
         (),
     )
     assert rows == [
-        {"id": executing_id, "status": "failed"},
+        {"id": expired_id, "status": "failed"},
         {"id": active_id, "status": "active"},
+        {"id": fresh_id, "status": "executing"},
     ]

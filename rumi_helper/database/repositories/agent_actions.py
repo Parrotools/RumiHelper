@@ -94,10 +94,12 @@ class AgentActionRepository:
             pending["status"] = "executing"
             return pending
 
-    async def recover_executing_agent_actions(self) -> int:
-        """Mark actions abandoned by a previous process as failed without retrying them."""
+    async def recover_executing_agent_actions(self, now: str) -> int:
+        """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(
-            "UPDATE pending_agent_actions SET status = 'failed' WHERE status = 'executing'"
+            "UPDATE pending_agent_actions SET status = 'failed' "
+            "WHERE status = 'executing' AND expires_at <= ?",
+            (str(now),),
         ) as cursor:
             await self.conn.commit()
             return cursor.rowcount
