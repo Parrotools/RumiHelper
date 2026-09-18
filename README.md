@@ -270,7 +270,7 @@ cp .env.example .env   # 编辑后
 .venv/bin/rumi-helper
 ```
 
-生产环境建议直接使用仓库中的 `ops/qqbot.service` 模板。默认部署路径为 `/opt/RumiHelper`，安装后由 console entry point `.venv/bin/rumi-helper` 启动；模板同时限制写权限到 `data/`，并启用基础 systemd sandbox。详细安装步骤见 `docs/DEPLOYMENT.md`。
+生产环境建议直接使用仓库中的 `ops/qqbot.service` 模板。默认部署路径为 `/opt/RumiHelper`，安装后由 console entry point `.venv/bin/rumi-helper` 启动；启动前可先运行 `.venv/bin/rumi-doctor` 做离线配置/权限预检，systemd 模板也会通过 `ExecStartPre` 自动执行该检查。模板同时限制写权限到 `data/`，并启用基础 systemd sandbox。详细安装步骤见 `docs/DEPLOYMENT.md`。
 
 ## 14. 开发
 

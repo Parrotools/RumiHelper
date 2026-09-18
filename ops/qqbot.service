@@ -8,6 +8,7 @@ Type=simple
 User=qqbot
 Group=qqbot
 WorkingDirectory=/opt/RumiHelper
+ExecStartPre=/opt/RumiHelper/.venv/bin/rumi-doctor
 ExecStart=/opt/RumiHelper/.venv/bin/rumi-helper
 Restart=on-failure
 RestartSec=5

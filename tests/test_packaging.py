@@ -31,6 +31,7 @@ def test_wheel_declares_console_entrypoint_and_root_bot_module():
     config = tomllib.loads((root / "pyproject.toml").read_text())
 
     assert config["project"]["scripts"]["rumi-helper"] == "bot:main"
+    assert config["project"]["scripts"]["rumi-doctor"] == "app.doctor:main"
     assert "bot" in config["tool"]["setuptools"]["py-modules"]
 
 

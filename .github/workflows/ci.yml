@@ -66,6 +66,22 @@ jobs:
             GITHUB_DIGEST_CRON='' \
             DAILY_REPORT_CRON='' \
             ENABLE_PLAYWRIGHT=false \
+            rumi-doctor
+
+          env \
+            DRIVER='~fastapi' \
+            HOST=127.0.0.1 \
+            PORT=18080 \
+            DATABASE_PATH="$tmp/bot.db" \
+            LLM_BASE_URL=http://127.0.0.1:9/v1 \
+            LLM_API_KEY='' \
+            ADMIN_QQ_IDS='' \
+            OWNER_QQ_ID='' \
+            ONEBOT_ACCESS_TOKEN=smoke-token \
+            GITHUB_CHECK_CRON='' \
+            GITHUB_DIGEST_CRON='' \
+            DAILY_REPORT_CRON='' \
+            ENABLE_PLAYWRIGHT=false \
             rumi-helper >server.log 2>&1 &
           pid=$!
           cleanup() {
@@ -134,4 +150,6 @@ jobs:
               text = archive.read(entry_points[0]).decode()
           if "rumi-helper = bot:main" not in text:
               raise SystemExit("rumi-helper console entry point missing")
+          if "rumi-doctor = app.doctor:main" not in text:
+              raise SystemExit("rumi-doctor console entry point missing")
           PY

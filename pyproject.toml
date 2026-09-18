@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 rumi-helper = "bot:main"
+rumi-doctor = "app.doctor:main"
 
 [project.optional-dependencies]
 dev = [

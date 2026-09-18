@@ -1,0 +1,93 @@
+import os
+
+from app.config import Settings
+from app.doctor import main, run_checks
+
+
+def _settings(tmp_path, **overrides):
+    values = {
+        "_env_file": None,
+        "database_path": str(tmp_path / "data" / "bot.db"),
+        "scheduler_timezone": "UTC",
+        "github_check_cron": "",
+        "github_digest_cron": "",
+        "daily_report_cron": "",
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
+def _statuses(checks):
+    return {check.name: check.status for check in checks}
+
+
+def test_doctor_accepts_safe_local_configuration_with_warnings(tmp_path):
+    checks = run_checks(_settings(tmp_path))
+    statuses = _statuses(checks)
+
+    assert "FAIL" not in statuses.values()
+    assert statuses["onebot_token"] == "WARN"
+    assert statuses["llm_api_key"] == "WARN"
+    assert statuses["admin_ids"] == "WARN"
+    assert statuses["owner_id"] == "WARN"
+
+
+def test_doctor_rejects_invalid_core_configuration(tmp_path):
+    settings = _settings(
+        tmp_path,
+        port=0,
+        llm_base_url="file:///tmp/model",
+        admin_qq_ids="not-a-qq",
+        owner_qq_id="also-bad",
+        database_path=str(tmp_path),
+        llm_timeout=0,
+    )
+    statuses = _statuses(run_checks(settings))
+
+    assert statuses["bind"] == "FAIL"
+    assert statuses["llm_url"] == "FAIL"
+    assert statuses["admin_ids"] == "FAIL"
+    assert statuses["owner_id"] == "FAIL"
+    assert statuses["database_path"] == "FAIL"
+    assert statuses["numeric_limits"] == "FAIL"
+
+
+def test_doctor_rejects_invalid_timezone(tmp_path):
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, scheduler_timezone="Not/A-Timezone"))
+    )
+    assert statuses["timezone"] == "FAIL"
+
+
+def test_doctor_rejects_invalid_cron(tmp_path):
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, github_check_cron="not a cron"))
+    )
+    assert statuses["github_check_cron"] == "FAIL"
+
+
+def test_doctor_does_not_echo_secret_when_settings_validation_fails(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PORT", "not-an-int")
+    monkeypatch.setenv("LLM_API_KEY", "super-secret-do-not-print")
+
+    assert main() == 1
+
+    output = capsys.readouterr().out
+    assert "CHECK settings FAIL" in output
+    assert "super-secret-do-not-print" not in output
+
+
+def test_doctor_database_path_checks_existing_file_permissions(tmp_path, monkeypatch):
+    database = tmp_path / "bot.db"
+    database.write_bytes(b"")
+    monkeypatch.setattr(os, "access", lambda path, mode: path != database)
+
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, database_path=str(database)))
+    )
+    assert statuses["database_path"] == "FAIL"

@@ -36,12 +36,13 @@ sudo chown -R qqbot:qqbot /opt/RumiHelper/data
 sudo chown root:qqbot /opt/RumiHelper/.env
 sudo chmod 640 /opt/RumiHelper/.env
 sudo install -m 0644 ops/qqbot.service /etc/systemd/system/qqbot.service
+sudo -u qqbot /opt/RumiHelper/.venv/bin/rumi-doctor
 sudo systemctl daemon-reload
 sudo systemctl enable --now qqbot.service
 sudo systemctl status qqbot.service
 ```
 
-如果部署目录不是 `/opt/RumiHelper`，先修改 unit 中的 `WorkingDirectory`、`ExecStart` 和 `ReadWritePaths`。日志由 journald 收集，可用 `journalctl -u qqbot.service -f` 查看。
+如果部署目录不是 `/opt/RumiHelper`，先修改 unit 中的 `WorkingDirectory`、`ExecStartPre`、`ExecStart` 和 `ReadWritePaths`。`rumi-doctor` 只做本地配置、资源、cron、时区和文件权限检查，不连接 QQ/LLM，也不会输出 token/API Key；`WARN` 不阻止启动，`FAIL` 返回非零并让 systemd 拒绝启动。日志由 journald 收集，可用 `journalctl -u qqbot.service -f` 查看。
 
 ## NapCat OneBot 11
 
