@@ -22,6 +22,7 @@ class ReportService:
         dispatcher: MessageDispatcher | None,
         notifications: NotificationSettingsService,
         timezone_name: str = "Asia/Shanghai",
+        outbound_max_attempts: int = 3,
     ):
         try:
             self._timezone = ZoneInfo(timezone_name)
@@ -30,6 +31,7 @@ class ReportService:
         self._db = db
         self._dispatcher = dispatcher
         self._notifications = notifications
+        self._outbound_max_attempts = max(1, int(outbound_max_attempts))
 
     async def build_daily_report(self, owner_id: str, report_date: date | None = None) -> str:
         owner_id = str(owner_id).strip()
@@ -52,8 +54,14 @@ class ReportService:
                 if not (await self._notifications.get(owner_id))["daily_report"]:
                     continue
                 content = await self.build_daily_report(owner_id, report_date)
-                await self._db.save_report(owner_id, "daily", period_start, period_end, content)
-                await self._dispatcher.enqueue_user(owner_id, content)
+                await self._db.save_report_and_enqueue_user(
+                    owner_id,
+                    "daily",
+                    period_start,
+                    period_end,
+                    content,
+                    self._outbound_max_attempts,
+                )
             except Exception:
                 logging.getLogger(__name__).exception("日报发送失败 owner=%s", owner_id)
 

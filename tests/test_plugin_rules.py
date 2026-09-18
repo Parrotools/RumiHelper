@@ -3,6 +3,7 @@
 覆盖验收场景 2/3/5/7 的"触发面"部分（权限与发送逻辑在服务层测试中覆盖）。
 """
 
+import asyncio
 from types import SimpleNamespace
 
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, MessageSegment, PrivateMessageEvent
@@ -248,3 +249,34 @@ def test_truncate_for_qq():
     out = truncate_for_qq(long)
     assert len(out) < 5000
     assert "已截断" in out
+
+
+async def test_summary_success_uses_shared_reply_gate(monkeypatch):
+    sent: list[str] = []
+
+    async def fake_fetch_document(runtime, url):
+        return object()
+
+    class FakeSummarizer:
+        async def summarize(self, doc):
+            return "summary"
+
+    async def fake_send_reply(matcher, runtime, message):
+        sent.append(message)
+
+    runtime = SimpleNamespace(
+        web_semaphore=asyncio.Semaphore(1),
+        summarizer=FakeSummarizer(),
+    )
+    matcher_without_direct_send = SimpleNamespace()
+
+    monkeypatch.setattr(web_summary, "_fetch_document", fake_fetch_document)
+    monkeypatch.setattr(web_summary, "send_reply", fake_send_reply)
+
+    await web_summary._summarize_one(
+        matcher_without_direct_send,
+        runtime,
+        "https://example.com/article",
+    )
+
+    assert sent == ["summary"]

@@ -25,10 +25,11 @@ from app.services.web.fetcher import (
     FetchError,
     FetchTimeoutError,
     PageTooLargeError,
+    TooManyRedirectsError,
     UnsupportedContentTypeError,
 )
 from app.services.web.url_parser import extract_urls
-from app.utils import send_local_reply, truncate_for_qq
+from app.utils import send_local_reply, send_reply, truncate_for_qq
 
 SUMMARY_COMMANDS = ("/总结", "/summary")
 MAX_URLS_PER_MESSAGE = 3
@@ -125,7 +126,8 @@ async def _fetch_document(runtime: Runtime, url: str):
     try:
         result = await runtime.fetcher.fetch(url)
         return extract(result.text, result.final_url)
-    except SSRFBlockedError:
+    except (SSRFBlockedError, PageTooLargeError, UnsupportedContentTypeError, TooManyRedirectsError):
+        # Security/resource policy decisions must not be bypassed by a browser fallback.
         raise
     except (FetchError, ExtractionError):
         if runtime.playwright_fetcher is None:
@@ -143,7 +145,7 @@ async def _summarize_one(matcher_: Matcher, runtime: Runtime, url: str, notice: 
         async with runtime.web_semaphore:  # 并发限制，防止慢网页拖死 Bot
             doc = await _fetch_document(runtime, url)
             summary = await runtime.summarizer.summarize(doc)
-        await matcher_.send(truncate_for_qq(summary))
+        await send_reply(matcher_, runtime, truncate_for_qq(summary))
     except SSRFBlockedError:
         await send_local_reply(matcher_, runtime, "该地址不被允许访问（内网或保留地址）。")
     except FetchTimeoutError:

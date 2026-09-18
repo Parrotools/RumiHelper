@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+import weakref
 from datetime import UTC, datetime, tzinfo
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -84,7 +85,9 @@ class GitHubTracker:
         self._dispatcher = dispatcher
         self._notifications = notifications or NotificationSettingsService(db)
         self._timezone = ZoneInfo(timezone_name)
-        self._repo_check_locks: dict[int, asyncio.Lock] = {}
+        self._repo_check_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     async def add_repository(self, owner_id: str, url: str) -> dict:
         owner_id = str(owner_id).strip()

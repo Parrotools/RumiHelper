@@ -76,6 +76,63 @@ async def test_scheduled_daily_report_respects_user_setting_and_sends(db):
 
     await service.run_scheduled_report({"report_date": "2030-01-02"})
 
-    assert len(dispatcher.enqueued) == 1
-    assert dispatcher.enqueued[0][0] == "user-1"
+    assert dispatcher.enqueued == []
     assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 1}
+    outbound = await db.fetchone(
+        "SELECT target_type, target_id, status, max_attempts FROM outbound_messages",
+        (),
+    )
+    assert outbound == {
+        "target_type": "user",
+        "target_id": "user-1",
+        "status": "pending",
+        "max_attempts": 3,
+    }
+
+
+async def test_scheduled_daily_report_is_idempotent_per_period(db):
+    dispatcher = FakeDispatcher()
+    notifications = NotificationSettingsService(db)
+    await notifications.set("user-1", daily_report=True)
+    service = ReportService(
+        db,
+        dispatcher,
+        notifications,
+        timezone_name="UTC",
+        outbound_max_attempts=7,
+    )
+
+    task = {"report_date": "2030-01-02"}
+    await service.run_scheduled_report(task)
+    await service.run_scheduled_report(task)
+
+    assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT max_attempts FROM outbound_messages",
+        (),
+    ) == {"max_attempts": 7}
+
+
+async def test_report_and_outbound_enqueue_roll_back_together(db):
+    dispatcher = FakeDispatcher()
+    notifications = NotificationSettingsService(db)
+    await notifications.set("user-1", daily_report=True)
+    service = ReportService(db, dispatcher, notifications, timezone_name="UTC")
+
+    await db.execute(
+        "CREATE TRIGGER reject_report_outbound BEFORE INSERT ON outbound_messages "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+
+    await service.run_scheduled_report({"report_date": "2030-01-02"})
+
+    assert await db.fetchone("SELECT COUNT(*) AS count FROM reports", ()) == {"count": 0}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}

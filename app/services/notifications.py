@@ -35,12 +35,13 @@ class NotificationSettingsService:
             raise NotificationSettingsError(f"不支持的通知项：{', '.join(sorted(unknown))}")
         if any(not isinstance(value, bool) for value in changes.values()):
             raise NotificationSettingsError("通知开关必须是布尔值")
-        settings = await self.get(user_id)
-        settings.update(changes)
-        await self._db.save_notification_settings(
-            settings["user_id"],
-            settings["github_notify"],
-            settings["daily_report"],
-            settings["reminder_notify"],
-        )
-        return settings
+        async with self._db.operation():
+            settings = await self.get(user_id)
+            settings.update(changes)
+            await self._db.save_notification_settings(
+                settings["user_id"],
+                settings["github_notify"],
+                settings["daily_report"],
+                settings["reminder_notify"],
+            )
+            return settings

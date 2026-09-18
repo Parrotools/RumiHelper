@@ -126,6 +126,7 @@ async def _init_runtime_unlocked() -> Runtime:
             dispatcher,
             notifications,
             timezone_name=settings.scheduler_timezone,
+            outbound_max_attempts=settings.outbound_max_attempts,
         )
         scheduler = SchedulerService(
             db,

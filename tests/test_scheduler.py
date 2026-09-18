@@ -299,3 +299,42 @@ async def test_stop_waits_for_inflight_task(db):
 
     assert finished.is_set()
     assert scheduler.is_running is False
+
+
+async def test_concurrent_notification_updates_do_not_overwrite_each_other(tmp_path):
+    class YieldingSettingsDatabase(Database):
+        async def fetch_notification_settings(self, user_id: str):
+            row = await super().fetch_notification_settings(user_id)
+            await asyncio.sleep(0)
+            return row
+
+        async def save_notification_settings(
+            self,
+            user_id: str,
+            github_notify: bool,
+            daily_report: bool,
+            reminder_notify: bool,
+        ) -> None:
+            await asyncio.sleep(0)
+            await super().save_notification_settings(
+                user_id,
+                github_notify,
+                daily_report,
+                reminder_notify,
+            )
+
+    database = YieldingSettingsDatabase(str(tmp_path / "notification-race.db"))
+    await database.connect()
+    try:
+        service = NotificationSettingsService(database)
+        await asyncio.gather(
+            service.set("user-1", github_notify=True),
+            service.set("user-1", daily_report=True),
+        )
+        stored = await service.get("user-1")
+
+        assert stored["github_notify"] is True
+        assert stored["daily_report"] is True
+        assert stored["reminder_notify"] is False
+    finally:
+        await database.close()

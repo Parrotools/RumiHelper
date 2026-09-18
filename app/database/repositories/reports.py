@@ -1,5 +1,8 @@
 """Database methods for ReportRepository."""
 
+from app.database.repositories.common import _now
+
+
 class ReportRepository:
     async def fetch_scheduled_tasks_for_report(
         self, owner_id: str, period_start: str, period_end: str
@@ -21,19 +24,84 @@ class ReportRepository:
         )
 
     async def fetch_daily_report_users(self) -> list[str]:
-        rows = await self.fetchall("SELECT user_id FROM notification_settings WHERE daily_report = 1 ORDER BY user_id")
+        rows = await self.fetchall(
+            "SELECT user_id FROM notification_settings WHERE daily_report = 1 ORDER BY user_id"
+        )
         return [str(row["user_id"]) for row in rows]
 
     async def save_report(
-        self, owner_id: str, report_type: str, period_start: str, period_end: str, content: str
+        self,
+        owner_id: str,
+        report_type: str,
+        period_start: str,
+        period_end: str,
+        content: str,
     ) -> int:
-        await self.execute(
-            "INSERT INTO reports (owner_id, report_type, period_start, period_end, content) VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(owner_id, report_type, period_start) DO UPDATE SET period_end = excluded.period_end, content = excluded.content",
-            (owner_id, report_type, period_start, period_end, content),
-        )
-        row = await self.fetchone(
-            "SELECT id FROM reports WHERE owner_id = ? AND report_type = ? AND period_start = ?",
-            (owner_id, report_type, period_start),
-        )
-        return int(row["id"])
+        async with self.operation():
+            await self.conn.execute(
+                "INSERT INTO reports (owner_id, report_type, period_start, period_end, content) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(owner_id, report_type, period_start) DO UPDATE SET "
+                "period_end = excluded.period_end, content = excluded.content",
+                (owner_id, report_type, period_start, period_end, content),
+            )
+            await self.conn.commit()
+            row = await self.fetchone(
+                "SELECT id FROM reports WHERE owner_id = ? AND report_type = ? AND period_start = ?",
+                (owner_id, report_type, period_start),
+            )
+            return int(row["id"])
+
+    async def save_report_and_enqueue_user(
+        self,
+        owner_id: str,
+        report_type: str,
+        period_start: str,
+        period_end: str,
+        content: str,
+        max_attempts: int,
+    ) -> tuple[int, bool]:
+        """Atomically persist a report and enqueue its first delivery exactly once.
+
+        The reports uniqueness constraint is the idempotency key. Re-running the
+        same period updates the stored content but does not create another
+        outbound row.
+        """
+        async with self.operation():
+            try:
+                async with self.conn.execute(
+                    "INSERT INTO reports "
+                    "(owner_id, report_type, period_start, period_end, content) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(owner_id, report_type, period_start) DO NOTHING",
+                    (owner_id, report_type, period_start, period_end, content),
+                ) as cursor:
+                    created = cursor.rowcount == 1
+
+                if not created:
+                    await self.conn.execute(
+                        "UPDATE reports SET period_end = ?, content = ? "
+                        "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
+                        (period_end, content, owner_id, report_type, period_start),
+                    )
+
+                row = await self.fetchone(
+                    "SELECT id FROM reports "
+                    "WHERE owner_id = ? AND report_type = ? AND period_start = ?",
+                    (owner_id, report_type, period_start),
+                )
+                report_id = int(row["id"])
+
+                if created:
+                    await self.conn.execute(
+                        "INSERT INTO outbound_messages "
+                        "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                        "VALUES ('user', ?, ?, ?, ?)",
+                        (owner_id, content, max(1, int(max_attempts)), _now()),
+                    )
+
+                await self.conn.commit()
+                return report_id, created
+            except Exception:
+                await self.conn.rollback()
+                raise
