@@ -155,14 +155,23 @@ class GitHubTracker:
             generated_at=datetime.now(self._timezone),
             timezone_info=self._timezone,
         )
-        for target in targets:
-            sender = self._dispatcher.enqueue_user if target["target_type"] == "user" else self._dispatcher.enqueue_group
-            try:
-                await sender(target["target_id"], message)
-            except Exception:
-                logger.exception(
-                    "GitHub 汇总发送失败 target=%s:%s", target["target_type"], target["target_id"]
-                )
+        deliveries = [
+            {
+                "target_type": target["target_type"],
+                "target_id": target["target_id"],
+                "content": message,
+            }
+            for target in targets
+        ]
+        try:
+            await self._db.enqueue_outbound_messages(
+                deliveries,
+                self._outbound_max_attempts,
+            )
+        except Exception:
+            logger.exception("GitHub 汇总写入发送队列失败 targets=%s", len(deliveries))
+            return
+        self._dispatcher.notify_queue_changed()
 
     async def _check_row(self, repo: dict, *, queue_notifications: bool = False) -> dict:
         repo_id = int(repo["id"])

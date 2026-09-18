@@ -21,6 +21,39 @@ class OutboundRepository:
             await self.conn.commit()
             return int(cursor.lastrowid)
 
+    async def enqueue_outbound_messages(
+        self,
+        deliveries: list[dict],
+        max_attempts: int,
+        not_before: str | None = None,
+    ) -> int:
+        """Atomically enqueue a batch so callers never leave a partial recipient set."""
+        if not deliveries:
+            return 0
+        next_attempt_at = not_before or _now()
+        async with self.operation():
+            try:
+                await self.conn.executemany(
+                    "INSERT INTO outbound_messages "
+                    "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            str(delivery["target_type"]),
+                            str(delivery["target_id"]),
+                            str(delivery["content"]),
+                            max(1, int(max_attempts)),
+                            next_attempt_at,
+                        )
+                        for delivery in deliveries
+                    ],
+                )
+                await self.conn.commit()
+                return len(deliveries)
+            except Exception:
+                await self.conn.rollback()
+                raise
+
     async def claim_outbound_message(self, now: str, lease_before: str) -> dict | None:
         async with self.operation():
             async with self.conn.execute(

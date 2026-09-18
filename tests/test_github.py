@@ -354,10 +354,57 @@ async def test_scheduled_digest_sends_latest_commit_to_all_configured_users(db):
 
     await tracker.run_scheduled_digest({})
 
-    assert [call[0:2] for call in dispatcher.enqueued] == [("group", "888"), ("user", "999")]
-    assert dispatcher.enqueued[0][2] == dispatcher.enqueued[1][2]
-    assert "Last commit 时间：2030-01-01 00:00:00" in dispatcher.enqueued[0][2]
-    assert "Last commit 消息：\n  message" in dispatcher.enqueued[0][2]
+    outbound = await db.fetchall(
+        "SELECT target_type, target_id, content, status FROM outbound_messages ORDER BY id",
+        (),
+    )
+    assert [(row["target_type"], row["target_id"]) for row in outbound] == [
+        ("group", "888"),
+        ("user", "999"),
+    ]
+    assert outbound[0]["content"] == outbound[1]["content"]
+    assert outbound[0]["status"] == outbound[1]["status"] == "pending"
+    assert "Last commit 时间：2030-01-01 00:00:00" in outbound[0]["content"]
+    assert "Last commit 消息：\n  message" in outbound[0]["content"]
+    assert dispatcher.wake_calls == 1
+
+
+async def test_scheduled_digest_rolls_back_entire_recipient_batch_on_enqueue_failure(db):
+    dispatcher = FakeDispatcher()
+    tracker = GitHubTracker(
+        db,
+        FakeGitHubClient(_snapshot("latest")),
+        dispatcher,
+        timezone_name="UTC",
+    )
+    await tracker.add_repository("user-1", "https://github.com/OpenAI/openai-python")
+    await db.replace_github_digest_targets([
+        {"target_type": "group", "target_id": "888"},
+        {"target_type": "user", "target_id": "999"},
+    ])
+    await db.execute(
+        "CREATE TRIGGER reject_second_digest_target BEFORE INSERT ON outbound_messages "
+        "WHEN NEW.target_id = '999' "
+        "BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+        (),
+    )
+
+    await tracker.run_scheduled_digest({})
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+    assert dispatcher.wake_calls == 0
+
+    await db.execute("DROP TRIGGER reject_second_digest_target", ())
+    await tracker.run_scheduled_digest({})
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 2}
+    assert dispatcher.wake_calls == 1
 
 
 def test_format_github_digest_handles_empty_repository_list():
