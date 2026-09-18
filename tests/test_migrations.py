@@ -183,3 +183,22 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
             )
     finally:
         await database.close()
+
+
+async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
+    path = str(tmp_path / "concurrent-connect.db")
+    first = Database(path)
+    second = Database(path)
+
+    await asyncio.gather(first.connect(), second.connect())
+    try:
+        expected = list(range(1, 9))
+        assert await first.migration_versions() == expected
+        assert await second.migration_versions() == expected
+        assert await first.fetchone(
+            "SELECT COUNT(*) AS count FROM schema_migrations",
+            (),
+        ) == {"count": len(expected)}
+    finally:
+        await first.close()
+        await second.close()

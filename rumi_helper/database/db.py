@@ -5,6 +5,7 @@ stable facade used by services and tests.
 """
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +21,25 @@ from rumi_helper.database.repositories.pending_broadcasts import PendingBroadcas
 from rumi_helper.database.repositories.reports import ReportRepository
 from rumi_helper.database.repositories.scheduler import SchedulerRepository
 from rumi_helper.database.repositories.settings import SettingsRepository
+
+
+def _split_sql_statements(script: str) -> list[str]:
+    """Split a migration script without breaking trigger BEGIN/END bodies."""
+    statements: list[str] = []
+    buffer: list[str] = []
+    for char in script:
+        buffer.append(char)
+        if char != ";":
+            continue
+        candidate = "".join(buffer).strip()
+        if candidate and sqlite3.complete_statement(candidate):
+            statements.append(candidate)
+            buffer.clear()
+
+    tail = "".join(buffer).strip()
+    if tail:
+        statements.append(tail)
+    return statements
 
 
 class Database(
@@ -48,6 +68,7 @@ class Database(
         self._conn = connection
         try:
             connection.row_factory = aiosqlite.Row
+            await connection.execute("PRAGMA busy_timeout=10000")
             await connection.execute("PRAGMA journal_mode=WAL")
             await self._apply_migrations()
         except Exception:
@@ -120,17 +141,29 @@ class Database(
         for version, sql in MIGRATIONS:
             if version in applied:
                 continue
-            # executescript() is not implicitly atomic across the whole script.
-            # Start the transaction inside the script, then write the version
-            # marker with a parameterized statement and commit them together.
-            script = "BEGIN IMMEDIATE;\n" + sql.rstrip()
             try:
-                await self.conn.executescript(script)
+                # Serialize migration writers across processes. Re-check after
+                # acquiring the write lock because another process may have
+                # applied this version while we were waiting.
+                await self.conn.execute("BEGIN IMMEDIATE")
+                async with self.conn.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version = ?",
+                    (int(version),),
+                ) as cursor:
+                    already_applied = await cursor.fetchone()
+                if already_applied is not None:
+                    await self.conn.commit()
+                    applied.add(int(version))
+                    continue
+
+                for statement in _split_sql_statements(sql):
+                    await self.conn.execute(statement)
                 await self.conn.execute(
                     "INSERT INTO schema_migrations (version) VALUES (?)",
                     (int(version),),
                 )
                 await self.conn.commit()
+                applied.add(int(version))
             except Exception:
                 await self.conn.rollback()
                 raise
