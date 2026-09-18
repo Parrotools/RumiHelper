@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     outbound_rate_limit_pause_seconds: float = 60.0
     outbound_queue_poll_seconds: float = 1.0
     outbound_lease_seconds: float = 60.0
+    outbound_terminal_history_limit: int = 5000
+    send_log_history_limit: int = 5000
     broadcast_require_confirm: bool = True
     broadcast_confirm_ttl_seconds: int = 300
 

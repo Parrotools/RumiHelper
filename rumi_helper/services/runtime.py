@@ -122,6 +122,8 @@ async def _init_runtime_unlocked() -> Runtime:
             rate_limit_pause_seconds=settings.outbound_rate_limit_pause_seconds,
             queue_poll_seconds=settings.outbound_queue_poll_seconds,
             lease_seconds=settings.outbound_lease_seconds,
+            terminal_history_limit=settings.outbound_terminal_history_limit,
+            send_log_history_limit=settings.send_log_history_limit,
         )
         stack.push_async_callback(dispatcher.stop)
 

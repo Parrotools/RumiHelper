@@ -128,6 +128,39 @@ class OutboundRepository:
             (next_attempt_at, error[:500], message_id),
         )
 
+    async def prune_terminal_outbound_messages(self, limit: int) -> None:
+        limit = max(0, int(limit))
+        async with self.operation():
+            if limit == 0:
+                await self.conn.execute(
+                    "DELETE FROM outbound_messages WHERE status IN ('sent', 'failed')"
+                )
+            else:
+                await self.conn.execute(
+                    "DELETE FROM outbound_messages "
+                    "WHERE status IN ('sent', 'failed') AND id NOT IN ("
+                    "  SELECT id FROM outbound_messages "
+                    "  WHERE status IN ('sent', 'failed') "
+                    "  ORDER BY id DESC LIMIT ?"
+                    ")",
+                    (limit,),
+                )
+            await self.conn.commit()
+
+    async def prune_send_logs(self, limit: int) -> None:
+        limit = max(0, int(limit))
+        async with self.operation():
+            if limit == 0:
+                await self.conn.execute("DELETE FROM send_logs")
+            else:
+                await self.conn.execute(
+                    "DELETE FROM send_logs WHERE id NOT IN ("
+                    "  SELECT id FROM send_logs ORDER BY id DESC LIMIT ?"
+                    ")",
+                    (limit,),
+                )
+            await self.conn.commit()
+
     async def outbound_message_counts(self) -> dict[str, int]:
         rows = await self.fetchall("SELECT status, COUNT(*) AS count FROM outbound_messages GROUP BY status", ())
         return {str(row["status"]): int(row["count"]) for row in rows}

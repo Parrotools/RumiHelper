@@ -304,6 +304,8 @@ user:789012
 | `INTERACTIVE_SEND_RATE_LIMIT_PER_SECOND` | 0.5 | 所有交互回复的统一发送速率 |
 | `OUTBOUND_ACCOUNT_PAUSE_SECONDS` | 1800 | 检测到账号掉线/登录态失效后暂停主动投递的秒数 |
 | `OUTBOUND_RATE_LIMIT_PAUSE_SECONDS` | 60 | 检测到接口限流后暂停主动投递的秒数 |
+| `OUTBOUND_TERMINAL_HISTORY_LIMIT` | 5000 | 保留最近多少条 sent/failed 主动消息元数据；0 表示不保留 |
+| `SEND_LOG_HISTORY_LIMIT` | 5000 | 保留最近多少条发送审计元数据；0 表示不保留 |
 | `BROADCAST_REQUIRE_CONFIRM` | true | 群发预览确认 |
 | `BROADCAST_CONFIRM_TTL_SECONDS` | 300 | 确认有效期 |
 | `MAX_CONCURRENT_WEB_TASKS` / `_LLM_TASKS` | 3 / 5 | 并发上限 |

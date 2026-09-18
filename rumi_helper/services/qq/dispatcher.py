@@ -85,6 +85,8 @@ class MessageDispatcher:
         queue_poll_seconds: float = 1.0,
         lease_seconds: float = 60.0,
         shutdown_timeout_seconds: float = 10.0,
+        terminal_history_limit: int = 5000,
+        send_log_history_limit: int = 5000,
     ):
         self._db = db
         self._interval = 1.0 / rate_limit_per_second if rate_limit_per_second and rate_limit_per_second > 0 else 0.0
@@ -97,6 +99,8 @@ class MessageDispatcher:
         self._lease_seconds = max(1.0, lease_seconds)
         self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
         self._shutdown_cancel_grace_seconds = min(1.0, self._shutdown_timeout_seconds)
+        self._terminal_history_limit = max(0, int(terminal_history_limit))
+        self._send_log_history_limit = max(0, int(send_log_history_limit))
         self._queue_task: asyncio.Task | None = None
         self._queue_wakeup = asyncio.Event()
         self._paused_until = 0.0
@@ -130,6 +134,8 @@ class MessageDispatcher:
 
     async def start(self) -> None:
         if self._queue_task is None:
+            await self._prune_terminal_history()
+            await self._prune_send_log_history()
             self._stopping = False
             self._queue_task = asyncio.create_task(self._queue_loop(), name="outbound-message-worker")
 
@@ -210,6 +216,7 @@ class MessageDispatcher:
                     # circuit breaker is lost on restart, but next_attempt_at is not.
                     await self._db.defer_outbound_messages(retry_at_text)
                     break
+            await self._prune_terminal_history()
             if self._stopping:
                 break
         return processed
@@ -349,6 +356,26 @@ class MessageDispatcher:
             logger.warning("主动发送熔断 reason=%s pause_seconds=%s", reason, int(pause_seconds))
         return max(0.0, self._paused_until - now)
 
+    async def _prune_terminal_history(self) -> None:
+        try:
+            await self._db.prune_terminal_outbound_messages(
+                self._terminal_history_limit
+            )
+        except Exception as exc:  # noqa: BLE001 - retention cleanup is non-critical
+            logger.warning(
+                "清理主动消息终态历史失败 error=%s",
+                type(exc).__name__,
+            )
+
+    async def _prune_send_log_history(self) -> None:
+        try:
+            await self._db.prune_send_logs(self._send_log_history_limit)
+        except Exception as exc:  # noqa: BLE001 - retention cleanup is non-critical
+            logger.warning(
+                "清理发送审计历史失败 error=%s",
+                type(exc).__name__,
+            )
+
     async def _log(self, result: SendResult, content: str) -> None:
         try:
             await self._db.insert_send_log(
@@ -356,3 +383,5 @@ class MessageDispatcher:
             )
         except Exception:
             logger.exception("写入 send_logs 失败")
+            return
+        await self._prune_send_log_history()

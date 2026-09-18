@@ -306,3 +306,124 @@ async def test_repository_outbox_apis_bound_content_without_dispatcher(db):
     for row in rows:
         assert len(row["content"]) <= QQ_TEXT_SAFE_LIMIT
         assert "内容过长已截断" in row["content"]
+
+
+async def test_zero_history_limit_deletes_terminal_rows_but_preserves_live_queue(db):
+    sent_id = await db.enqueue_outbound_message("user", "101", "sent", 3)
+    failed_id = await db.enqueue_outbound_message("user", "102", "failed", 1)
+    pending_id = await db.enqueue_outbound_message("user", "103", "pending", 3)
+    await db.mark_outbound_message_sent(sent_id, "2030-01-01 00:00:00", "m1")
+    await db.retry_outbound_message(
+        failed_id,
+        1,
+        1,
+        "2030-01-01 00:00:00",
+        "SendError",
+    )
+    await db.insert_send_log("user", "101", "body", True, "m1", None)
+
+    await db.prune_terminal_outbound_messages(0)
+    await db.prune_send_logs(0)
+
+    assert await db.fetchall(
+        "SELECT id, status FROM outbound_messages ORDER BY id",
+        (),
+    ) == [{"id": pending_id, "status": "pending"}]
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM send_logs",
+        (),
+    ) == {"count": 0}
+
+
+async def test_delivery_history_pruning_preserves_active_queue_rows(db):
+    sent_id = await db.enqueue_outbound_message("user", "101", "sent-old", 3)
+    failed_id = await db.enqueue_outbound_message("user", "102", "failed-old", 1)
+    recent_sent_id = await db.enqueue_outbound_message("user", "103", "sent-new", 3)
+    pending_id = await db.enqueue_outbound_message("user", "104", "pending", 3)
+
+    await db.mark_outbound_message_sent(
+        sent_id,
+        "2030-01-01 00:00:00",
+        "m1",
+    )
+    await db.retry_outbound_message(
+        failed_id,
+        1,
+        1,
+        "2030-01-01 00:00:00",
+        "SendError",
+    )
+    await db.mark_outbound_message_sent(
+        recent_sent_id,
+        "2030-01-01 00:00:01",
+        "m2",
+    )
+
+    await db.prune_terminal_outbound_messages(2)
+
+    rows = await db.fetchall(
+        "SELECT id, status FROM outbound_messages ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {"id": failed_id, "status": "failed"},
+        {"id": recent_sent_id, "status": "sent"},
+        {"id": pending_id, "status": "pending"},
+    ]
+
+    for index in range(4):
+        await db.insert_send_log(
+            "user",
+            str(index),
+            "body",
+            index % 2 == 0,
+            str(index),
+            None,
+        )
+    await db.prune_send_logs(2)
+    assert await db.fetchall(
+        "SELECT target_id FROM send_logs ORDER BY id",
+        (),
+    ) == [{"target_id": "2"}, {"target_id": "3"}]
+
+
+async def test_dispatcher_start_prunes_existing_delivery_history(db):
+    for index in range(3):
+        message_id = await db.enqueue_outbound_message(
+            "user",
+            str(100 + index),
+            f"sent-{index}",
+            3,
+        )
+        await db.mark_outbound_message_sent(
+            message_id,
+            f"2030-01-01 00:00:0{index}",
+            f"m{index}",
+        )
+        await db.insert_send_log(
+            "user",
+            str(index),
+            "body",
+            True,
+            f"m{index}",
+            None,
+        )
+
+    dispatcher = MessageDispatcher(
+        db,
+        terminal_history_limit=1,
+        send_log_history_limit=1,
+        queue_poll_seconds=60,
+    )
+    await dispatcher.start()
+    await dispatcher.stop()
+
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages "
+        "WHERE status IN ('sent', 'failed')",
+        (),
+    ) == {"count": 1}
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM send_logs",
+        (),
+    ) == {"count": 1}
