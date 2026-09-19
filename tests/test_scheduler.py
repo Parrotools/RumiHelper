@@ -1029,3 +1029,56 @@ async def test_run_task_quarantines_corrupt_payload_before_claim(db):
     assert task["enabled"] == 0
     assert task["last_run"] is None
     assert task["next_run"] is None
+
+
+@pytest.mark.parametrize(
+    ("task_type", "owner_id", "payload"),
+    [
+        (
+            "reminder",
+            "user-1",
+            {"target_type": "group", "target_id": "30000", "message": "wrong target"},
+        ),
+        (
+            "group_message",
+            "admin-1",
+            {"target_type": "user", "target_id": "30000", "message": "wrong target"},
+        ),
+        (
+            "topic_joke",
+            "admin-1",
+            {"target_type": "group", "target_id": "30000", "topic": ""},
+        ),
+    ],
+)
+async def test_run_task_quarantines_invalid_builtin_payload_fields(
+    db,
+    task_type,
+    owner_id,
+    payload,
+):
+    task_id = await db.create_scheduled_task(
+        owner_id,
+        task_type,
+        payload,
+        "0 * * * *",
+        (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        llm=FakeLLM(["unused"]),
+        is_admin=lambda _user_id: True,
+    )
+
+    await scheduler.run_task(task_id, force=True)
+
+    task = await db.fetch_scheduled_task(task_id)
+    assert task["enabled"] == 0
+    assert task["last_run"] is None
+    assert task["next_run"] is None
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}

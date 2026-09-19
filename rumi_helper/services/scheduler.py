@@ -381,6 +381,33 @@ class SchedulerService:
         if not isinstance(payload, dict):
             await self._disable_invalid_task(task, "invalid_payload_type")
             return False
+        if not self._builtin_payload_is_valid(task, payload):
+            await self._disable_invalid_task(task, "invalid_payload_fields")
+            return False
+        return True
+
+    @staticmethod
+    def _builtin_payload_is_valid(task: dict, payload: dict) -> bool:
+        task_type = str(task.get("task_type", ""))
+        owner_id = str(task.get("owner_id", ""))
+        if task_type == "reminder":
+            return (
+                payload.get("target_type") == "user"
+                and str(payload.get("target_id", "")) == owner_id
+                and bool(str(payload.get("message", "")).strip())
+            )
+        if task_type == GROUP_MESSAGE_TASK_TYPE:
+            return (
+                payload.get("target_type") == "group"
+                and str(payload.get("target_id", "")).isdigit()
+                and bool(str(payload.get("message", "")).strip())
+            )
+        if task_type == TOPIC_JOKE_TASK_TYPE:
+            return (
+                payload.get("target_type") == "group"
+                and str(payload.get("target_id", "")).isdigit()
+                and bool(str(payload.get("topic", "")).strip())
+            )
         return True
 
     async def _disable_invalid_task(self, task: dict, reason: str) -> None:
