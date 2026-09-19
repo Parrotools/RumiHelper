@@ -248,7 +248,15 @@ async def _init_runtime_unlocked() -> Runtime:
             scheduler=scheduler,
             github_client=github_client,
             github=github,
-            health=HealthService(db, llm, github_client, scheduler, started_at, check_qq=True),
+            health=HealthService(
+                db,
+                llm,
+                github_client,
+                scheduler,
+                started_at,
+                check_qq=True,
+                dispatcher=dispatcher,
+            ),
             report=report,
             sessions=SessionManager(
                 db,

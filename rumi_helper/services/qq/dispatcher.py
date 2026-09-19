@@ -112,6 +112,15 @@ class MessageDispatcher:
     async def enqueue_group(self, group_id: str, message: str, max_attempts: int | None = None) -> int:
         return await self._enqueue("group", str(group_id), message, max_attempts)
 
+    @property
+    def worker_running(self) -> bool:
+        task = self._queue_task
+        return (
+            task is not None
+            and not task.done()
+            and not self._stopping
+        )
+
     def notify_queue_changed(self) -> None:
         """Wake the durable outbound worker after another atomic DB workflow queued rows."""
         self._queue_wakeup.set()

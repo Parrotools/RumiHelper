@@ -15,6 +15,7 @@ def format_status(status: dict, *, detailed: bool) -> str:
         status.get("database", {}).get("ok")
         and status.get("llm", {}).get("ok")
         and status.get("scheduler", {}).get("running")
+        and status.get("outbound_worker", {}).get("running", True)
     )
     lines = [
         "qq-llm-bot 运行状态：",
@@ -33,6 +34,10 @@ def format_status(status: dict, *, detailed: bool) -> str:
             (
                 f"Scheduler：{'运行中' if status.get('scheduler', {}).get('running') else '未运行'}"
                 f"（{status.get('scheduler', {}).get('jobs', 0)} 个任务）"
+            ),
+            (
+                "主动队列："
+                f"{'运行中' if status.get('outbound_worker', {}).get('running', True) else '未运行'}"
             ),
             f"GitHub 监控：{counts.get('github_repositories', 0)}",
             f"Memory：{counts.get('memories', 0)}",
@@ -53,6 +58,7 @@ class HealthService:
         timeout: float = 3.0,
         check_qq: bool = False,
         cache_ttl_seconds: float = 2.0,
+        dispatcher: Any | None = None,
     ):
         self._db = db
         self._llm = llm
@@ -61,6 +67,7 @@ class HealthService:
         self._started_at = started_at
         self._timeout = max(0.1, timeout)
         self._check_qq = check_qq
+        self._dispatcher = dispatcher
         self._cache_ttl_seconds = max(0.0, float(cache_ttl_seconds))
         self._probe_cache: dict[str, tuple[float, dict]] = {}
         self._probe_inflight: dict[str, asyncio.Task[dict]] = {}
@@ -75,12 +82,19 @@ class HealthService:
             self._probe(self._llm.check_health),
         )
         scheduler = {"running": self._scheduler.is_running, "jobs": self._scheduler.job_count}
+        outbound_worker = self._outbound_worker_status()
         return {
-            "ok": database["ok"] and llm["ok"] and scheduler["running"],
+            "ok": (
+                database["ok"]
+                and llm["ok"]
+                and scheduler["running"]
+                and outbound_worker["running"]
+            ),
             "uptime_seconds": int(time.monotonic() - self._started_at),
             "database": database,
             "llm": llm,
             "scheduler": scheduler,
+            "outbound_worker": outbound_worker,
         }
 
     async def check(self, *, include_diagnostics: bool = True) -> dict:
@@ -101,13 +115,19 @@ class HealthService:
             probes.append(self._probe(self._qq_probe))
         database, llm, github, *qq_results = await asyncio.gather(*probes)
         scheduler = {"running": self._scheduler.is_running, "jobs": self._scheduler.job_count}
+        outbound_worker = self._outbound_worker_status()
         result = {
-            "ok": all(item["ok"] for item in (database, llm, github, *qq_results)) and scheduler["running"],
+            "ok": (
+                all(item["ok"] for item in (database, llm, github, *qq_results))
+                and scheduler["running"]
+                and outbound_worker["running"]
+            ),
             "uptime_seconds": int(time.monotonic() - self._started_at),
             "database": database,
             "llm": llm,
             "github": github,
             "scheduler": scheduler,
+            "outbound_worker": outbound_worker,
         }
         if include_diagnostics:
             result["counts"] = await self._counts() if database["ok"] else {}
@@ -142,6 +162,11 @@ class HealthService:
     def _forget_probe(self, key: str, task: asyncio.Task[dict]) -> None:
         if self._probe_inflight.get(key) is task:
             self._probe_inflight.pop(key, None)
+
+    def _outbound_worker_status(self) -> dict[str, bool]:
+        if self._dispatcher is None:
+            return {"running": True}
+        return {"running": bool(self._dispatcher.worker_running)}
 
     async def _qq_probe(self) -> None:
         """检查 OneBot 是否连着一个在线的 QQ 账号，而不只检查进程是否存在。"""

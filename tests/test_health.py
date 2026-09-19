@@ -188,6 +188,7 @@ def test_admin_status_keeps_operational_diagnostics():
     rendered = format_status(status, detailed=True)
 
     assert "Scheduler：运行中（7 个任务）" in rendered
+    assert "主动队列：运行中" in rendered
     assert "GitHub 监控：9" in rendered
     assert "Memory：11" in rendered
     assert "最近错误：send failed" in rendered
@@ -273,3 +274,38 @@ async def test_health_can_omit_operational_diagnostics(db):
     assert result["ok"] is True
     assert "counts" not in result
     assert "recent_errors" not in result
+
+
+async def test_health_fails_when_outbound_worker_is_stopped(db):
+    dispatcher = SimpleNamespace(worker_running=False)
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        dispatcher=dispatcher,
+        cache_ttl_seconds=0,
+    )
+
+    readiness = await health.check_readiness()
+    full = await health.check()
+
+    assert readiness["outbound_worker"] == {"running": False}
+    assert readiness["ok"] is False
+    assert full["outbound_worker"] == {"running": False}
+    assert full["ok"] is False
+
+
+def test_public_status_reports_abnormal_when_outbound_worker_is_stopped():
+    status = {
+        "uptime_seconds": 42,
+        "database": {"ok": True},
+        "llm": {"ok": True},
+        "scheduler": {"running": True, "jobs": 1},
+        "outbound_worker": {"running": False},
+    }
+
+    rendered = format_status(status, detailed=False)
+
+    assert "服务：异常" in rendered

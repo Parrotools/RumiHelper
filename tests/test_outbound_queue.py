@@ -185,7 +185,9 @@ async def test_stop_finishes_inflight_delivery_before_worker_exits(db):
         api_caller=api_caller,
         queue_poll_seconds=0.1,
     )
+    assert dispatcher.worker_running is False
     await dispatcher.start()
+    assert dispatcher.worker_running is True
     message_id = await dispatcher.enqueue_user("123", "graceful")
 
     await entered.wait()
@@ -201,6 +203,7 @@ async def test_stop_finishes_inflight_delivery_before_worker_exits(db):
         (message_id,),
     ) == {"status": "sent", "message_id": "321"}
     assert dispatcher._queue_task is None
+    assert dispatcher.worker_running is False
 
 
 async def test_stop_is_bounded_when_api_swallows_first_cancel(db):
