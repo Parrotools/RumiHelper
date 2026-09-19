@@ -362,3 +362,43 @@ def test_admin_status_reports_stopped_confirmation_housekeeping():
     rendered = format_status(status, detailed=True)
 
     assert "确认清理：未运行" in rendered
+
+
+async def test_cancelled_health_caller_does_not_leave_unretrieved_probe_error(db):
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        cache_ttl_seconds=60,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    unhandled: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+    async def failing_probe():
+        entered.set()
+        await release.wait()
+        raise RuntimeError("orphaned health probe failure")
+
+    caller = asyncio.create_task(
+        health._cached_probe("cancel-test", failing_probe)
+    )
+    await entered.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    try:
+        assert "cancel-test" not in health._probe_inflight
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)

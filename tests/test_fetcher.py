@@ -607,3 +607,38 @@ async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
     assert captured["http_route"] is True
     assert captured["ws_route"] is True
     assert captured["context_closed"] is True
+
+
+async def test_cancelled_fetch_caller_does_not_leave_unretrieved_shared_error(
+    monkeypatch,
+):
+    fetcher = WebFetcher(cache_ttl=0)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    unhandled: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+    async def failing_fetch(_url: str):
+        entered.set()
+        await release.wait()
+        raise RuntimeError("orphaned shared fetch failure")
+
+    monkeypatch.setattr(fetcher, "_fetch_uncached", failing_fetch)
+    caller = asyncio.create_task(fetcher.fetch("https://example.com/cancelled"))
+    await entered.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    try:
+        assert fetcher._inflight == {}
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+        await fetcher.aclose()

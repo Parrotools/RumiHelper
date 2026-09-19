@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import httpx
 
 from rumi_helper.security.ssrf import SSRFBlockedError, assert_url_safe, resolve_url_safe
+from rumi_helper.services.async_utils import await_shared_task
 
 CACHE_MAX_ENTRIES = 16
 
@@ -162,7 +163,7 @@ class WebFetcher:
             task.add_done_callback(
                 lambda done, key=url: self._forget_inflight(key, done)
             )
-        return await asyncio.shield(task)
+        return await await_shared_task(task)
 
     def _forget_inflight(self, url: str, task: asyncio.Task[FetchResult]) -> None:
         if self._inflight.get(url) is task:

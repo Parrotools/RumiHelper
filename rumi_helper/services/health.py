@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from rumi_helper.database.db import Database
+from rumi_helper.services.async_utils import await_shared_task
 
 
 def format_status(status: dict, *, detailed: bool) -> str:
@@ -167,7 +168,7 @@ class HealthService:
                 lambda done, cache_key=key: self._forget_probe(cache_key, done)
             )
 
-        result = await asyncio.shield(task)
+        result = await await_shared_task(task)
         if self._cache_ttl_seconds > 0:
             self._probe_cache[key] = (time.monotonic(), copy.deepcopy(result))
         return copy.deepcopy(result)
