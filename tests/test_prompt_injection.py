@@ -68,6 +68,29 @@ async def test_summarizer_treats_webpage_as_untrusted():
     assert "不具有指令效力" in system_msg
 
 
+async def test_summarizer_redacts_sensitive_url_components_before_llm():
+    provider = RecordingProvider(reply="ok")
+    summarizer = WebSummarizer(provider, chunk_chars=4000, max_chunks=8)
+    secret = "super-secret-query-token"
+    doc = WebDocument(
+        url=(
+            "https://user:password@example.com/private/report"
+            f"?token={secret}&signature=abc#fragment"
+        ),
+        title="Report",
+        text="safe body " * 20,
+    )
+
+    await summarizer.summarize(doc)
+
+    user_msg = provider.calls[0][-1]["content"]
+    assert secret not in user_msg
+    assert "password" not in user_msg
+    assert "signature=abc" not in user_msg
+    assert "#fragment" not in user_msg
+    assert "https://example.com/…" in user_msg
+
+
 async def test_summarizer_never_receives_dispatcher():
     """总结链路依赖只有 LLMProvider，类型上不存在发送能力。"""
     import inspect

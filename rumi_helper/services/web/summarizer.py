@@ -8,6 +8,7 @@ from rumi_helper.promptlib import load_prompt
 from rumi_helper.security.prompt_injection import wrap_untrusted_content
 from rumi_helper.services.llm.base import LLMProvider
 from rumi_helper.services.web.extractor import WebDocument
+from rumi_helper.services.web.url_parser import safe_url_for_log
 
 MAP_INSTRUCTION = (
     "下面是一篇长网页的第 {index}/{total} 段。请用 3-5 条要点概括这一段的信息，"
@@ -64,7 +65,11 @@ class WebSummarizer:
 
     async def summarize(self, doc: WebDocument) -> str:
         text = doc.text.strip()
-        body = f"网页标题：{doc.title or '（无标题）'}\n网页 URL：{doc.url}\n\n网页正文：\n"
+        prompt_url = safe_url_for_log(doc.url)
+        body = (
+            f"网页标题：{doc.title or '（无标题）'}\n"
+            f"网页 URL：{prompt_url}\n\n网页正文：\n"
+        )
 
         if len(text) <= self._chunk_chars:
             content = f"{_SINGLE_INSTRUCTION}\n\n{body}{wrap_untrusted_content(text)}"
@@ -92,7 +97,8 @@ class WebSummarizer:
             )
 
         reduce_content = (
-            f"{REDUCE_INSTRUCTION}\n\n网页标题：{doc.title or '（无标题）'}\n网页 URL：{doc.url}\n\n"
+            f"{REDUCE_INSTRUCTION}\n\n网页标题：{doc.title or '（无标题）'}\n"
+            f"网页 URL：{prompt_url}\n\n"
             f"分段摘要汇总：\n{wrap_untrusted_content(chr(10).join(partials))}"
         )
         final = await self._provider.chat(
