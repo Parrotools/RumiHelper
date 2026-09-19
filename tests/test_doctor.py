@@ -229,3 +229,69 @@ def test_doctor_warns_when_playwright_enabled(tmp_path):
     checks = run_checks(_settings(tmp_path, enable_playwright=True))
     statuses = _statuses(checks)
     assert statuses["playwright_ssrf"] == "WARN"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("send_rate_limit_per_second", 0),
+        ("interactive_send_rate_limit_per_second", -1),
+        ("outbound_retry_delay_seconds", 0),
+        ("outbound_account_pause_seconds", -1),
+        ("outbound_rate_limit_pause_seconds", 0),
+        ("outbound_queue_poll_seconds", 0),
+        ("max_active_reminders_per_user", 0),
+        ("max_github_repositories_per_user", -1),
+        ("max_context_messages", 0),
+        ("max_context_chars", 0),
+    ],
+)
+def test_doctor_rejects_disabled_or_invalid_protective_limits(
+    tmp_path,
+    field,
+    value,
+):
+    statuses = _statuses(run_checks(_settings(tmp_path, **{field: value})))
+    assert statuses["numeric_limits"] == "FAIL"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("web_cache_ttl_seconds", -1),
+        ("outbound_terminal_history_limit", -1),
+        ("send_log_history_limit", -1),
+        ("non_llm_reply_delay_min_seconds", -0.1),
+        ("non_llm_reply_delay_max_seconds", -0.1),
+    ],
+)
+def test_doctor_rejects_negative_nonnegative_limits(tmp_path, field, value):
+    statuses = _statuses(run_checks(_settings(tmp_path, **{field: value})))
+    assert statuses["numeric_limits"] == "FAIL"
+
+
+def test_doctor_allows_documented_zero_disable_values(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                web_cache_ttl_seconds=0,
+                outbound_terminal_history_limit=0,
+                send_log_history_limit=0,
+            )
+        )
+    )
+    assert statuses["numeric_limits"] == "PASS"
+
+
+def test_doctor_rejects_inverted_non_llm_reply_delay_range(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                non_llm_reply_delay_min_seconds=10,
+                non_llm_reply_delay_max_seconds=2,
+            )
+        )
+    )
+    assert statuses["numeric_limits"] == "FAIL"
