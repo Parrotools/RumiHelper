@@ -245,10 +245,16 @@ class AgentHarness:
         text: str,
         history: list[dict],
     ) -> dict[str, Any] | None:
-        history_text = "\n".join(
-            f"{item.get('role', 'unknown')}: {str(item.get('content', ''))[:1000]}"
-            for item in history[-6:]
-        )
+        planner_input = {
+            "history": [
+                {
+                    "role": str(item.get("role", "unknown")),
+                    "content": str(item.get("content", ""))[:1000],
+                }
+                for item in history[-6:]
+            ],
+            "current_request": str(text).strip()[:_MAX_REQUEST_CHARS],
+        }
         tool_text = json.dumps(
             [tool.prompt_schema() for tool in self._tools.values()],
             ensure_ascii=False,
@@ -261,9 +267,10 @@ class AgentHarness:
             },
             {
                 "role": "user",
-                "content": (
-                    f"<history>\n{history_text}\n</history>\n"
-                    f"<current_request>\n{str(text).strip()[:_MAX_REQUEST_CHARS]}\n</current_request>"
+                "content": json.dumps(
+                    planner_input,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
                 ),
             },
         ]
