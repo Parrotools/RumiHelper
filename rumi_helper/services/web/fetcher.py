@@ -317,8 +317,12 @@ class PlaywrightFetcher:
                 if proxy_settings:
                     launch_kwargs["proxy"] = proxy_settings
                 browser = await p.chromium.launch(**launch_kwargs)
+                context = None
                 try:
-                    page = await browser.new_page(user_agent=DEFAULT_USER_AGENT)
+                    context = await browser.new_context(
+                        user_agent=DEFAULT_USER_AGENT,
+                        service_workers="block",
+                    )
                     blocked_error: SSRFBlockedError | None = None
 
                     async def guard_request(route, request) -> None:
@@ -336,7 +340,15 @@ class PlaywrightFetcher:
                                 return
                         await route.continue_()
 
-                    await page.route("**/*", guard_request)
+                    async def block_websocket(websocket) -> None:
+                        await websocket.close(
+                            code=1008,
+                            reason="Blocked by webpage fetch policy",
+                        )
+
+                    await context.route("**/*", guard_request)
+                    await context.route_web_socket("**/*", block_websocket)
+                    page = await context.new_page()
                     try:
                         await page.goto(
                             url,
@@ -356,6 +368,8 @@ class PlaywrightFetcher:
                     )
                     html = await page.content()
                 finally:
+                    if context is not None:
+                        await context.close()
                     await browser.close()
         except PlaywrightTimeoutError as e:
             raise FetchTimeoutError(str(e)) from e

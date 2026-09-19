@@ -14,7 +14,7 @@
 - GitHub 仓库监控：手动检查、commit/Star/Fork/Issue/Release 变化通知
 - 自然语言工具操作：可直接描述 GitHub、记忆、提醒、通知、定时任务、日报、状态和管理员群发等操作；白名单工具执行，修改/发送操作二次确认
 - 每日日报：汇总 GitHub 变化、任务/提醒和重要记忆，可手动查看
-- 网页总结：识别消息中的 URL，抓取正文，超长网页 Map-Reduce 分块总结；URL 结果进程内缓存（TTL 可配）；可选 Playwright 渲染兜底，并对浏览器每个 HTTP(S) 请求执行 SSRF 校验
+- 网页总结：识别消息中的 URL，抓取正文，超长网页 Map-Reduce 分块总结；URL 结果进程内缓存（TTL 可配）；可选 Playwright 渲染兜底，对浏览器每个 HTTP(S) 请求执行 SSRF 校验，同时禁用 Service Worker 并阻断 WebSocket
 - 主动发送 / 多目标群发（仅管理员，带预览确认、TTL、限速、逐目标结果记录、旧待确认任务自动作废）
 - 安全：SSRF 逐跳校验、Prompt Injection 定界防御、核心聊天模型无发送能力、API Key 不入日志
 
@@ -228,7 +228,7 @@ ADMIN_QQ_IDS=111111,222222
 
 ## 10. 安全设计说明
 
-- **SSRF**：普通 `WebFetcher` 对每一跳先做 scheme + DNS/IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），随后把 TCP 连接固定到本次已校验的公网 IP，同时保留原域名的 Host/SNI，从而关闭 DNS rebinding 的校验-连接窗口；多个已校验公网 IP 会在网络失败时依次 fallback。网页抓取显式 `trust_env=false`，不会读取 `HTTP_PROXY` / `HTTPS_PROXY`；如需代理必须使用 `WEB_PROXY_URL=socks5://...`，因为普通 HTTP CONNECT 代理无法在 IP pinning 后可靠保留原域名 TLS SNI。可选 Playwright fallback 会对浏览器每个 HTTP(S) 请求重新做 SSRF 校验，但 Chromium 无法复用同一套 IP pinning，因此其 DNS rebinding 防护弱于默认 WebFetcher；对高安全部署建议保持 `ENABLE_PLAYWRIGHT=false`。
+- **SSRF**：普通 `WebFetcher` 对每一跳先做 scheme + DNS/IP 校验（loopback / RFC1918 / link-local（含 169.254.169.254 云 metadata）/ 组播 / 保留段全部拒绝），随后把 TCP 连接固定到本次已校验的公网 IP，同时保留原域名的 Host/SNI，从而关闭 DNS rebinding 的校验-连接窗口；多个已校验公网 IP 会在网络失败时依次 fallback。网页抓取显式 `trust_env=false`，不会读取 `HTTP_PROXY` / `HTTPS_PROXY`；如需代理必须使用 `WEB_PROXY_URL=socks5://...`，因为普通 HTTP CONNECT 代理无法在 IP pinning 后可靠保留原域名 TLS SNI。可选 Playwright fallback 会在独立 BrowserContext 中禁用 Service Worker、阻断 WebSocket，并对浏览器每个 HTTP(S) 请求重新做 SSRF 校验；但 Chromium 无法复用同一套 IP pinning，因此其 DNS rebinding 防护仍弱于默认 WebFetcher。对高安全部署建议保持 `ENABLE_PLAYWRIGHT=false`。
 - **Prompt Injection**：网页内容永远包在 `<untrusted_web_content>` 定界符内送入 LLM，system prompt 明确声明其中任何指令无效；总结链路代码中不存在 `MessageDispatcher` 引用，网页内容在架构上不可能触发 QQ 发送。
 - **发送权限**：`MessageDispatcher` 是唯一发送出口；核心聊天模型没有发送能力。自然语言 Agent 只能调用已注册的受限工具，管理员群发和定时群发仍需管理员权限及确认。
 - **Agent Harness**：LLM 只能返回白名单中的结构化工具名和参数；参数由业务代码再次校验。只读查询直接执行，记忆/通知/提醒/定时/清空/仓库变更/群发等写操作先写入 SQLite 待确认队列，确认后原子领取，避免重复执行。

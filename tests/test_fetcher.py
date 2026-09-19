@@ -9,6 +9,7 @@ import pytest
 
 from rumi_helper.security.ssrf import SSRFBlockedError
 from rumi_helper.services.web.fetcher import (
+    DEFAULT_USER_AGENT,
     FetchTimeoutError,
     PageTooLargeError,
     PlaywrightFetcher,
@@ -135,6 +136,7 @@ async def test_too_many_redirects(monkeypatch):
     await f.aclose()
 
 
+
 async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
     class FakeRequest:
         def __init__(self, url: str):
@@ -154,20 +156,20 @@ async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
     class FakePage:
         url = "https://example.com/page"
 
-        def __init__(self):
-            self.handler = None
+        def __init__(self, context):
+            self.context = context
             self.internal_route = None
-
-        async def route(self, _pattern, handler):
-            self.handler = handler
 
         async def goto(self, *args, **kwargs):
             public_route = FakeRoute()
-            await self.handler(public_route, FakeRequest("https://example.com/page"))
+            await self.context.http_handler(
+                public_route,
+                FakeRequest("https://example.com/page"),
+            )
             assert public_route.continued is True
 
             self.internal_route = FakeRoute()
-            await self.handler(
+            await self.context.http_handler(
                 self.internal_route,
                 FakeRequest("http://127.0.0.1/internal"),
             )
@@ -177,11 +179,30 @@ async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
         async def content(self):
             raise AssertionError("blocked redirect must not reach page.content()")
 
-    page = FakePage()
+    class FakeBrowserContext:
+        def __init__(self):
+            self.http_handler = None
+            self.ws_handler = None
+            self.page = FakePage(self)
+
+        async def route(self, _pattern, handler):
+            self.http_handler = handler
+
+        async def route_web_socket(self, _pattern, handler):
+            self.ws_handler = handler
+
+        async def new_page(self):
+            return self.page
+
+        async def close(self):
+            return None
+
+    browser_context = FakeBrowserContext()
 
     class FakeBrowser:
-        async def new_page(self, **kwargs):
-            return page
+        async def new_context(self, **kwargs):
+            assert kwargs["service_workers"] == "block"
+            return browser_context
 
         async def close(self):
             return None
@@ -215,12 +236,18 @@ async def test_playwright_blocks_private_redirect_before_request(monkeypatch):
         if url.startswith("http://127.0.0.1"):
             raise SSRFBlockedError()
 
-    monkeypatch.setattr("rumi_helper.services.web.fetcher.assert_url_safe", fake_assert_url_safe)
+    monkeypatch.setattr(
+        "rumi_helper.services.web.fetcher.assert_url_safe",
+        fake_assert_url_safe,
+    )
 
     with pytest.raises(SSRFBlockedError):
         await PlaywrightFetcher().fetch("https://example.com/page")
     assert checked[-1] == "http://127.0.0.1/internal"
-    assert page.internal_route is not None and page.internal_route.aborted is True
+    assert (
+        browser_context.page.internal_route is not None
+        and browser_context.page.internal_route.aborted is True
+    )
 
 
 async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
@@ -231,15 +258,26 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
         pass
 
     class FakePage:
-        async def route(self, *args, **kwargs):
-            return None
-
         async def goto(self, *args, **kwargs):
             raise FakePlaywrightTimeoutError("navigation timed out")
 
-    class FakeBrowser:
-        async def new_page(self, **kwargs):
+    class FakeBrowserContext:
+        async def route(self, *args, **kwargs):
+            return None
+
+        async def route_web_socket(self, *args, **kwargs):
+            return None
+
+        async def new_page(self):
             return FakePage()
+
+        async def close(self):
+            return None
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            assert kwargs["service_workers"] == "block"
+            return FakeBrowserContext()
 
         async def close(self):
             return None
@@ -266,11 +304,13 @@ async def test_playwright_navigation_timeout_is_a_fetch_timeout(monkeypatch):
     async def allow_url(_url: str, **_kwargs):
         return None
 
-    monkeypatch.setattr("rumi_helper.services.web.fetcher.assert_url_safe", allow_url)
+    monkeypatch.setattr(
+        "rumi_helper.services.web.fetcher.assert_url_safe",
+        allow_url,
+    )
 
     with pytest.raises(FetchTimeoutError, match="navigation timed out"):
         await PlaywrightFetcher().fetch("https://example.com/page")
-
 
 async def test_concurrent_same_url_shares_one_inflight_request(monkeypatch):
     from rumi_helper.security import ssrf
@@ -389,14 +429,109 @@ async def test_fetch_retries_next_validated_ip_after_network_failure(monkeypatch
     assert seen == ["93.184.216.34", "1.1.1.1"]
 
 
+
+
+async def test_playwright_blocks_websocket_connections(monkeypatch):
+    captured: dict = {}
+
+    class FakeWebSocketRoute:
+        def __init__(self):
+            self.closed = False
+            self.connect_attempted = False
+            self.close_kwargs = None
+
+        async def close(self, **kwargs):
+            self.closed = True
+            self.close_kwargs = kwargs
+
+        async def connect_to_server(self):
+            self.connect_attempted = True
+            raise AssertionError("websocket must not connect to server")
+
+    websocket = FakeWebSocketRoute()
+
+    class FakePage:
+        url = "https://example.com/"
+
+        def __init__(self, context):
+            self.context = context
+
+        async def goto(self, *_args, **_kwargs):
+            await self.context.ws_handler(websocket)
+
+        async def content(self):
+            return "<html><body>ok</body></html>"
+
+    class FakeBrowserContext:
+        def __init__(self):
+            self.ws_handler = None
+
+        async def route(self, *_args, **_kwargs):
+            return None
+
+        async def route_web_socket(self, _pattern, handler):
+            self.ws_handler = handler
+
+        async def new_page(self):
+            return FakePage(self)
+
+        async def close(self):
+            return None
+
+    browser_context = FakeBrowserContext()
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured["context_kwargs"] = kwargs
+            return browser_context
+
+        async def close(self):
+            return None
+
+    class FakePlaywright:
+        class chromium:
+            @staticmethod
+            async def launch(**kwargs):
+                return FakeBrowser()
+
+    class FakePlaywrightContext:
+        async def __aenter__(self):
+            return FakePlaywright()
+
+        async def __aexit__(self, *args):
+            return None
+
+    async_api = ModuleType("playwright.async_api")
+    async_api.Error = RuntimeError
+    async_api.TimeoutError = TimeoutError
+    async_api.async_playwright = FakePlaywrightContext
+    playwright = ModuleType("playwright")
+    playwright.async_api = async_api
+    monkeypatch.setitem(sys.modules, "playwright", playwright)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
+
+    async def allow_url(_url: str, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "rumi_helper.services.web.fetcher.assert_url_safe",
+        allow_url,
+    )
+
+    result = await PlaywrightFetcher().fetch("https://example.com/")
+
+    assert result.status_code == 200
+    assert captured["context_kwargs"]["service_workers"] == "block"
+    assert websocket.closed is True
+    assert websocket.connect_attempted is False
+    assert websocket.close_kwargs["code"] == 1008
+
+
 async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
     captured: dict = {}
 
     class FakePage:
         url = "https://example.com/"
-
-        async def route(self, *_args, **_kwargs):
-            return None
 
         async def goto(self, *_args, **_kwargs):
             return None
@@ -404,9 +539,23 @@ async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
         async def content(self):
             return "<html><body>ok</body></html>"
 
-    class FakeBrowser:
-        async def new_page(self, **_kwargs):
+    class FakeBrowserContext:
+        async def route(self, *_args, **_kwargs):
+            captured["http_route"] = True
+
+        async def route_web_socket(self, *_args, **_kwargs):
+            captured["ws_route"] = True
+
+        async def new_page(self):
             return FakePage()
+
+        async def close(self):
+            captured["context_closed"] = True
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            captured["context_kwargs"] = kwargs
+            return FakeBrowserContext()
 
         async def close(self):
             return None
@@ -453,3 +602,8 @@ async def test_playwright_passes_socks_proxy_to_browser(monkeypatch):
         "username": "user",
         "password": "secret",
     }
+    assert captured["context_kwargs"]["service_workers"] == "block"
+    assert captured["context_kwargs"]["user_agent"] == DEFAULT_USER_AGENT
+    assert captured["http_route"] is True
+    assert captured["ws_route"] is True
+    assert captured["context_closed"] is True
