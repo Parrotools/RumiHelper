@@ -123,7 +123,7 @@ async def _handle_github(event: MessageEvent):
                 runtime,
                 f'{ref.owner}/{ref.name}\n'
                 f'Star：{info.get("stargazers_count", 0)}  Fork：{info.get("forks_count", 0)}\n'
-                f'开放 Issue/PR：{info.get("open_issues_count", 0)}\n{info.get("html_url", ref.url)}'
+                f'开放 Issue/PR：{info.get("open_issues_count", 0)}\n{ref.url}'
             )
         elif command == "watch":
             if len(args) != 2:

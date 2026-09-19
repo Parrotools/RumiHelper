@@ -28,6 +28,8 @@ class GitHubTrackerError(ValueError):
 
 def parse_repo_url(url: str) -> GitHubRepoRef:
     value = str(url).strip()
+    if len(value) > _MAX_REPO_URL_CHARS:
+        raise GitHubTrackerError("GitHub 仓库 URL 过长")
     markdown_link = _MARKDOWN_LINK_PATTERN.fullmatch(value)
     if markdown_link:
         value = markdown_link.group(1)
@@ -38,10 +40,18 @@ def parse_repo_url(url: str) -> GitHubRepoRef:
     if len(parts) != 2:
         raise GitHubTrackerError("GitHub 仓库 URL 必须包含 owner 和 repo")
     owner, name = parts[0], parts[1].removesuffix(".git")
-    if not _NAME_PATTERN.fullmatch(owner) or not _NAME_PATTERN.fullmatch(name):
+    if (
+        len(owner) > _MAX_REPO_COMPONENT_CHARS
+        or len(name) > _MAX_REPO_COMPONENT_CHARS
+        or not _NAME_PATTERN.fullmatch(owner)
+        or not _NAME_PATTERN.fullmatch(name)
+    ):
         raise GitHubTrackerError("GitHub 仓库名称无效")
     return GitHubRepoRef(owner, name, f"https://github.com/{owner}/{name}")
 
+
+_MAX_REPO_URL_CHARS = 512
+_MAX_REPO_COMPONENT_CHARS = 100
 
 _PREVIOUS_UNSET = object()
 

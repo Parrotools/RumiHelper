@@ -13,6 +13,24 @@ from rumi_helper.services.http_utils import (
 
 _LINK_LAST_PAGE = re.compile(r"[?&]page=(\d+)[^>]*>;\s*rel=\"last\"")
 _MAX_GITHUB_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_SHA_CHARS = 128
+_MAX_COMMIT_MESSAGE_CHARS = 4000
+_MAX_AUTHOR_CHARS = 256
+_MAX_COMMIT_TIME_CHARS = 128
+_MAX_RELEASE_CHARS = 256
+_MAX_SQLITE_INTEGER = (1 << 63) - 1
+
+
+def _bounded_text(value: object, limit: int) -> str:
+    return str(value or "")[: max(0, int(limit))]
+
+
+def _bounded_count(value: object) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(number, _MAX_SQLITE_INTEGER))
 
 
 class GitHubAPIError(Exception):
@@ -34,17 +52,30 @@ def parse_snapshot_payload(
     commit_author = commit.get("author") or {}
     embedded_author = commit_data.get("author") or {}
     author = commit_author.get("login") or embedded_author.get("name") or "unknown"
+    release_tag = release.get("tag_name") if release else None
     return GitHubSnapshot(
-        stars=int(repository.get("stargazers_count", 0)),
-        forks=int(repository.get("forks_count", 0)),
-        watchers=int(repository.get("subscribers_count", repository.get("watchers_count", 0))),
-        commits_count=int(commits_count),
-        latest_commit_sha=str(commit.get("sha") or ""),
-        latest_commit_message=str(commit_data.get("message") or ""),
-        latest_commit_author=str(author),
-        latest_commit_time=str(embedded_author.get("date") or ""),
-        latest_release=str(release.get("tag_name")) if release and release.get("tag_name") else None,
-        open_issues_count=int(repository.get("open_issues_count", 0)),
+        stars=_bounded_count(repository.get("stargazers_count", 0)),
+        forks=_bounded_count(repository.get("forks_count", 0)),
+        watchers=_bounded_count(
+            repository.get("subscribers_count", repository.get("watchers_count", 0))
+        ),
+        commits_count=_bounded_count(commits_count),
+        latest_commit_sha=_bounded_text(commit.get("sha"), _MAX_SHA_CHARS),
+        latest_commit_message=_bounded_text(
+            commit_data.get("message"),
+            _MAX_COMMIT_MESSAGE_CHARS,
+        ),
+        latest_commit_author=_bounded_text(author, _MAX_AUTHOR_CHARS),
+        latest_commit_time=_bounded_text(
+            embedded_author.get("date"),
+            _MAX_COMMIT_TIME_CHARS,
+        ),
+        latest_release=(
+            _bounded_text(release_tag, _MAX_RELEASE_CHARS)
+            if release_tag
+            else None
+        ),
+        open_issues_count=_bounded_count(repository.get("open_issues_count", 0)),
     )
 
 

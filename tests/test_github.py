@@ -1135,3 +1135,50 @@ async def test_github_client_rejects_oversized_success_response():
             await client.get_repository("OpenAI", "openai-python")
     finally:
         await client.aclose()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/" + ("a" * 101) + "/repo",
+        "https://github.com/owner/" + ("b" * 101),
+        "https://github.com/" + ("x" * 600) + "/repo",
+    ],
+)
+def test_parse_repo_url_rejects_oversized_components(url):
+    with pytest.raises(GitHubTrackerError):
+        parse_repo_url(url)
+
+
+def test_parse_snapshot_payload_bounds_untrusted_text_and_counts():
+    huge = "x" * 10000
+    snapshot = parse_snapshot_payload(
+        {
+            "stargazers_count": 10**100,
+            "forks_count": -123,
+            "subscribers_count": "not-a-number",
+            "open_issues_count": 10**100,
+        },
+        {
+            "sha": huge,
+            "commit": {
+                "message": huge,
+                "author": {"name": huge, "date": huge},
+            },
+            "author": {"login": huge},
+        },
+        {"tag_name": huge},
+        commits_count=10**100,
+    )
+
+    assert len(snapshot.latest_commit_sha) == 128
+    assert len(snapshot.latest_commit_message) == 4000
+    assert len(snapshot.latest_commit_author) == 256
+    assert len(snapshot.latest_commit_time) == 128
+    assert snapshot.latest_release is not None
+    assert len(snapshot.latest_release) == 256
+    assert snapshot.stars == (1 << 63) - 1
+    assert snapshot.forks == 0
+    assert snapshot.watchers == 0
+    assert snapshot.commits_count == (1 << 63) - 1
+    assert snapshot.open_issues_count == (1 << 63) - 1
