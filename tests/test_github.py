@@ -1120,3 +1120,18 @@ async def test_digest_clear_committed_before_enqueue_blocks_stale_targets(tmp_pa
     finally:
         await settings_db.close()
         await digest_db.close()
+
+
+async def test_github_client_rejects_oversized_success_response():
+    body = b"x" * (2 * 1024 * 1024 + 1)
+
+    client = GitHubClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=body)
+        )
+    )
+    try:
+        with pytest.raises(GitHubAPIError, match="响应过大"):
+            await client.get_repository("OpenAI", "openai-python")
+    finally:
+        await client.aclose()

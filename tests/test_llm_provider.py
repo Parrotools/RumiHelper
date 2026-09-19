@@ -135,3 +135,42 @@ async def test_health_check_respects_same_concurrency_limit_as_chat():
     assert transport.calls == 2
 
     await provider.aclose()
+
+
+async def test_chat_rejects_oversized_provider_response():
+    body = b"x" * (4 * 1024 * 1024 + 1)
+    provider = OpenAICompatibleProvider(
+        BASE,
+        "k",
+        "m",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=body)
+        ),
+    )
+    try:
+        with pytest.raises(LLMResponseError, match="内容过大"):
+            await provider.chat([{"role": "user", "content": "hi"}])
+    finally:
+        await provider.aclose()
+
+
+async def test_health_check_does_not_read_response_body():
+    class ExplodingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise AssertionError("health check must not consume response body")
+            yield b""  # pragma: no cover
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/models")
+        return httpx.Response(200, stream=ExplodingStream())
+
+    provider = OpenAICompatibleProvider(
+        BASE,
+        "k",
+        "m",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await provider.check_health()
+    finally:
+        await provider.aclose()

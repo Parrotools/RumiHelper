@@ -1,9 +1,14 @@
 """OpenAI Compatible LLM 实现（httpx 异步），配置全部来自环境变量。"""
 
 import asyncio
+import json
 
 import httpx
 
+from rumi_helper.services.http_utils import (
+    ResponseBodyTooLargeError,
+    read_limited_response_body,
+)
 from rumi_helper.services.llm.base import (
     LLMError,
     LLMHTTPError,
@@ -11,6 +16,8 @@ from rumi_helper.services.llm.base import (
     LLMResponseError,
     LLMTimeoutError,
 )
+
+_MAX_LLM_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -47,19 +54,30 @@ class OpenAICompatibleProvider(LLMProvider):
 
         async with self._semaphore:
             try:
-                resp = await self._client.post(url, json=payload, headers=headers)
+                async with self._client.stream(
+                    "POST",
+                    url,
+                    json=payload,
+                    headers=headers,
+                ) as resp:
+                    if resp.status_code != 200:
+                        # Do not read or propagate arbitrary provider error bodies.
+                        raise LLMHTTPError(resp.status_code)
+                    try:
+                        body = await read_limited_response_body(
+                            resp,
+                            _MAX_LLM_RESPONSE_BYTES,
+                        )
+                    except ResponseBodyTooLargeError as e:
+                        raise LLMResponseError("LLM 返回内容过大") from e
             except httpx.TimeoutException as e:
                 raise LLMTimeoutError("LLM 请求超时") from e
             except httpx.HTTPError as e:
                 raise LLMError(f"LLM 请求失败：{type(e).__name__}") from e
 
-        if resp.status_code != 200:
-            # Do not propagate arbitrary provider response bodies into logs.
-            raise LLMHTTPError(resp.status_code)
-
         try:
-            data = resp.json()
-        except ValueError as e:
+            data = json.loads(body)
+        except (UnicodeDecodeError, ValueError) as e:
             raise LLMResponseError("LLM 返回了无效 JSON") from e
 
         try:
@@ -78,13 +96,15 @@ class OpenAICompatibleProvider(LLMProvider):
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         async with self._semaphore:
             try:
-                response = await self._client.get(
+                async with self._client.stream(
+                    "GET",
                     f"{self._base_url}/models",
                     headers=headers,
-                )
+                ) as response:
+                    status_code = response.status_code
             except httpx.TimeoutException as e:
                 raise LLMTimeoutError("LLM 请求超时") from e
             except httpx.HTTPError as e:
                 raise LLMError(f"LLM 请求失败：{type(e).__name__}") from e
-        if response.status_code >= 400:
-            raise LLMHTTPError(response.status_code)
+        if status_code >= 400:
+            raise LLMHTTPError(status_code)

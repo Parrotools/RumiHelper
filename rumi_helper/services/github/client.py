@@ -6,8 +6,13 @@ from typing import Any
 import httpx
 
 from rumi_helper.services.github.models import GitHubRepoRef, GitHubSnapshot
+from rumi_helper.services.http_utils import (
+    ResponseBodyTooLargeError,
+    read_limited_response_body,
+)
 
 _LINK_LAST_PAGE = re.compile(r"[?&]page=(\d+)[^>]*>;\s*rel=\"last\"")
+_MAX_GITHUB_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 class GitHubAPIError(Exception):
@@ -103,17 +108,32 @@ class GitHubClient:
 
     async def _get(self, path: str, *, params: dict | None = None) -> httpx.Response:
         try:
-            response = await self._client.get(path, params=params)
+            async with self._client.stream("GET", path, params=params) as response:
+                if response.status_code >= 400:
+                    if (
+                        response.status_code == 403
+                        and response.headers.get("X-RateLimit-Remaining") == "0"
+                    ):
+                        raise GitHubRateLimitError("GitHub API 已达到速率限制")
+                    # Do not read or propagate arbitrary remote error bodies.
+                    raise GitHubAPIError(f"GitHub API HTTP {response.status_code}")
+                try:
+                    body = await read_limited_response_body(
+                        response,
+                        _MAX_GITHUB_RESPONSE_BYTES,
+                    )
+                except ResponseBodyTooLargeError as e:
+                    raise GitHubAPIError("GitHub API 响应过大") from e
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=body,
+                    request=response.request,
+                )
         except httpx.TimeoutException as e:
             raise GitHubAPIError("GitHub API 请求超时") from e
         except httpx.HTTPError as e:
             raise GitHubAPIError(f"GitHub API 请求失败：{type(e).__name__}") from e
-        if response.status_code >= 400:
-            if response.status_code == 403 and response.headers.get("X-RateLimit-Remaining") == "0":
-                raise GitHubRateLimitError("GitHub API 已达到速率限制")
-            # Avoid propagating arbitrary remote response bodies into logs.
-            raise GitHubAPIError(f"GitHub API HTTP {response.status_code}")
-        return response
 
     @staticmethod
     def _commits_count(response: httpx.Response, fallback: int) -> int:
