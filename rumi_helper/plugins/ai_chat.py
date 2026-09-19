@@ -208,6 +208,9 @@ async def _handle(event: MessageEvent):
 
         memory_context = await _memory_context_for_event(runtime, event)
         prompt_text = await _with_reply_context(event, text)
+        prepare_turn = getattr(runtime.sessions, "prepare_turn_context", None)
+        if prepare_turn is not None:
+            history, prompt_text = await prepare_turn(session_key, prompt_text)
         messages, context = _build_chat_messages(
             runtime,
             event,

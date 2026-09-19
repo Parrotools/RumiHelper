@@ -207,3 +207,45 @@ async def test_context_respects_total_character_budget_from_newest_messages(db):
         {"role": "user", "content": "CCCCCC"},
     ]
     assert sum(len(item["content"]) for item in context) == 10
+
+
+async def test_prepare_turn_context_reserves_budget_for_current_message(db):
+    sm = SessionManager(
+        db,
+        max_context_messages=10,
+        max_context_chars=20,
+    )
+    key = SessionManager.private_key("turn-budget")
+    await sm.append(key, "user", "AAAAAA")
+    await sm.append(key, "assistant", "BBBBBB")
+
+    history, current = await sm.prepare_turn_context(
+        key,
+        "CCCCCCCCCC",
+    )
+
+    assert current == "CCCCCCCCCC"
+    assert history == [
+        {"role": "user", "content": "AAAA"},
+        {"role": "assistant", "content": "BBBBBB"},
+    ]
+    assert sum(len(item["content"]) for item in history) + len(current) == 20
+
+
+async def test_prepare_turn_context_caps_current_message_before_llm(db):
+    sm = SessionManager(
+        db,
+        max_context_messages=10,
+        max_context_chars=20,
+    )
+    key = SessionManager.private_key("oversized-current")
+    await sm.append(key, "assistant", "old context")
+
+    history, current = await sm.prepare_turn_context(
+        key,
+        "abcdefghij" * 5,
+    )
+
+    assert history == []
+    assert len(current) == 20
+    assert "上下文已截断" in current

@@ -47,8 +47,13 @@ class SessionManager:
             return f"group:{group_id}"
         return f"group:{group_id}:{user_id}"
 
-    async def get_context(self, session_key: str) -> list[dict]:
-        """返回最近 N 条，并按总字符预算保留最新上下文。"""
+    async def get_context(
+        self,
+        session_key: str,
+        *,
+        reserve_chars: int = 0,
+    ) -> list[dict]:
+        """返回最近 N 条，并在为当前 turn 预留字符后保留最新上下文。"""
         rows = await self._db.fetchall(
             "SELECT role, content FROM ("
             "  SELECT id, role, content FROM messages WHERE session_key = ? ORDER BY id DESC LIMIT ?"
@@ -56,7 +61,7 @@ class SessionManager:
             (session_key, self._max),
         )
         selected: list[dict] = []
-        remaining = self._max_chars
+        remaining = max(0, self._max_chars - max(0, int(reserve_chars)))
         for row in reversed(rows):
             if remaining <= 0:
                 break
@@ -67,6 +72,19 @@ class SessionManager:
             remaining -= len(content)
         selected.reverse()
         return selected
+
+    async def prepare_turn_context(
+        self,
+        session_key: str,
+        current_content: str,
+    ) -> tuple[list[dict], str]:
+        """Bound the current prompt and fit history into the remaining context budget."""
+        bounded = self._truncate_message(str(current_content))
+        history = await self.get_context(
+            session_key,
+            reserve_chars=len(bounded),
+        )
+        return history, bounded
 
     async def append(self, session_key: str, role: str, content: str) -> None:
         """Append one message and trim history atomically."""

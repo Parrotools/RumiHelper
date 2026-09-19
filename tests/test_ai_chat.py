@@ -325,3 +325,92 @@ async def test_unexpected_llm_failure_is_redacted_and_does_not_persist_turn(monk
     ]
     assert "secret-token" not in repr(logged)
     assert "/private/provider" not in repr(logged)
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_bounded_current_turn_for_llm_and_persistence(monkeypatch):
+    sent: list[str] = []
+    captured: dict = {}
+
+    class FakeSessions:
+        async def get_context(self, session_key: str) -> list[dict]:
+            return [{"role": "assistant", "content": "old"}]
+
+        async def prepare_turn_context(self, session_key: str, current_content: str):
+            captured["prepared_input"] = (session_key, current_content)
+            return [], "bounded-current"
+
+        async def append_turn(
+            self,
+            session_key: str,
+            user_text: str,
+            assistant_text: str,
+        ) -> None:
+            captured["stored_turn"] = (
+                session_key,
+                user_text,
+                assistant_text,
+            )
+
+    class FakeLLM:
+        async def chat(self, messages: list[dict], **kwargs) -> str:
+            captured["llm_messages"] = messages
+            return "answer"
+
+    runtime = SimpleNamespace(
+        sessions=FakeSessions(),
+        llm=FakeLLM(),
+        agent=None,
+        settings=SimpleNamespace(
+            agent_tool_calling_enabled=False,
+            group_shared_context=False,
+        ),
+    )
+
+    async def fake_memory_context(_runtime, _event) -> str:
+        return ""
+
+    async def fake_reply_context(_event, _text: str) -> str:
+        return "raw-current-" + ("x" * 1000)
+
+    def fake_build(
+        _runtime,
+        _event,
+        text: str,
+        history: list[dict],
+        _memory_context: str,
+        **_kwargs,
+    ):
+        captured["build_text"] = text
+        captured["build_history"] = history
+        return (
+            [{"role": "user", "content": text}],
+            SimpleNamespace(mode="normal"),
+        )
+
+    async def fake_send_reply(_matcher, _runtime, message: str) -> None:
+        sent.append(message)
+
+    monkeypatch.setattr(ai_chat, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(ai_chat, "_owner_identity_reply", lambda *_args: None)
+    monkeypatch.setattr(ai_chat, "_memory_context_for_event", fake_memory_context)
+    monkeypatch.setattr(ai_chat, "_with_reply_context", fake_reply_context)
+    monkeypatch.setattr(ai_chat, "_build_chat_messages", fake_build)
+    monkeypatch.setattr(ai_chat, "_temperature", lambda *_args: 0.0)
+    monkeypatch.setattr(ai_chat, "send_reply", fake_send_reply)
+
+    await ai_chat._handle(_private_event(Message("original")))
+
+    assert captured["prepared_input"][0] == "private:20000"
+    assert captured["prepared_input"][1].startswith("raw-current-")
+    assert captured["build_text"] == "bounded-current"
+    assert captured["build_history"] == []
+    assert captured["llm_messages"] == [
+        {"role": "user", "content": "bounded-current"}
+    ]
+    assert captured["stored_turn"] == (
+        "private:20000",
+        "bounded-current",
+        "answer",
+    )
+    assert sent == ["answer"]
