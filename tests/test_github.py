@@ -6,6 +6,7 @@ from datetime import UTC
 import httpx
 import pytest
 
+import rumi_helper.database.repositories.github as github_repository_module
 from rumi_helper.database.db import Database
 from rumi_helper.services.github.client import (
     GitHubAPIError,
@@ -1182,3 +1183,64 @@ def test_parse_snapshot_payload_bounds_untrusted_text_and_counts():
     assert snapshot.watchers == 0
     assert snapshot.commits_count == (1 << 63) - 1
     assert snapshot.open_issues_count == (1 << 63) - 1
+
+
+async def test_snapshot_history_limit_prunes_old_rows_for_direct_insert(db, monkeypatch):
+    monkeypatch.setattr(
+        github_repository_module,
+        "_GITHUB_SNAPSHOT_HISTORY_LIMIT",
+        3,
+    )
+    repo_id = await db.insert_github_repository(
+        "user-1",
+        "OpenAI",
+        "openai-python",
+        "https://github.com/OpenAI/openai-python",
+    )
+    assert repo_id is not None
+
+    for i in range(5):
+        await db.insert_github_snapshot(
+            repo_id,
+            _snapshot(f"sha-{i}", stars=i).to_dict(),
+        )
+
+    rows = await db.fetchall(
+        "SELECT latest_commit_sha FROM github_snapshots "
+        "WHERE repo_id = ? ORDER BY id",
+        (repo_id,),
+    )
+    assert rows == [
+        {"latest_commit_sha": "sha-2"},
+        {"latest_commit_sha": "sha-3"},
+        {"latest_commit_sha": "sha-4"},
+    ]
+
+
+async def test_tracker_snapshot_history_limit_prunes_old_rows(db, monkeypatch):
+    monkeypatch.setattr(
+        github_repository_module,
+        "_GITHUB_SNAPSHOT_HISTORY_LIMIT",
+        3,
+    )
+    client = FakeGitHubClient(_snapshot("sha-0", stars=0))
+    tracker = GitHubTracker(db, client)
+    repo = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+
+    for i in range(5):
+        client.snapshot = _snapshot(f"sha-{i}", stars=i)
+        await tracker.check("user-1", repo["repo_url"])
+
+    rows = await db.fetchall(
+        "SELECT latest_commit_sha FROM github_snapshots "
+        "WHERE repo_id = ? ORDER BY id",
+        (repo["id"],),
+    )
+    assert rows == [
+        {"latest_commit_sha": "sha-2"},
+        {"latest_commit_sha": "sha-3"},
+        {"latest_commit_sha": "sha-4"},
+    ]

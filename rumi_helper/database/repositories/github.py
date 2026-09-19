@@ -2,6 +2,8 @@
 
 from rumi_helper.database.repositories.common import _now, _outbound_content
 
+_GITHUB_SNAPSHOT_HISTORY_LIMIT = 2000
+
 
 class GitHubRepository:
     async def insert_github_repository(
@@ -132,9 +134,21 @@ class GitHubRepository:
         )
         return int(cursor.lastrowid)
 
+    async def _prune_github_snapshots_unlocked(self, repo_id: int) -> None:
+        limit = max(1, int(_GITHUB_SNAPSHOT_HISTORY_LIMIT))
+        await self.conn.execute(
+            "DELETE FROM github_snapshots "
+            "WHERE repo_id = ? AND id NOT IN ("
+            "  SELECT id FROM github_snapshots "
+            "  WHERE repo_id = ? ORDER BY id DESC LIMIT ?"
+            ")",
+            (int(repo_id), int(repo_id), limit),
+        )
+
     async def insert_github_snapshot(self, repo_id: int, snapshot: dict) -> int:
         async with self.operation():
             snapshot_id = await self._insert_github_snapshot_unlocked(repo_id, snapshot)
+            await self._prune_github_snapshots_unlocked(repo_id)
             await self.conn.commit()
             return snapshot_id
 
@@ -179,6 +193,8 @@ class GitHubRepository:
                         await self.conn.commit()
                         return None, 0
                     snapshot_id = int(cursor.lastrowid)
+
+                await self._prune_github_snapshots_unlocked(repo_id)
 
                 queued = 0
                 if deliveries:
