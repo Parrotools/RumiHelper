@@ -1010,3 +1010,113 @@ async def test_revoked_admin_github_targets_are_disabled_before_delivery(db):
         {"target_type": "user", "target_id": "999", "enabled": 0},
     ]
     assert dispatcher.wake_calls == 1
+
+
+async def test_github_notify_disable_committed_before_snapshot_enqueue_blocks_delivery(tmp_path):
+    path = str(tmp_path / "github-notify-disable-race.db")
+    settings_db = Database(path)
+    check_db = Database(path)
+    await settings_db.connect()
+    await check_db.connect()
+    try:
+        tracker = GitHubTracker(
+            settings_db,
+            FakeGitHubClient(_snapshot("first")),
+        )
+        repo = await tracker.add_repository(
+            "user-1",
+            "https://github.com/OpenAI/openai-python",
+        )
+        previous_id = await settings_db.insert_github_snapshot(
+            repo["id"],
+            _snapshot("first").to_dict(),
+        )
+        await settings_db.upsert_github_notification(
+            repo["id"],
+            "user",
+            "user-1",
+            True,
+        )
+        await NotificationSettingsService(settings_db).set(
+            "user-1",
+            github_notify=True,
+        )
+
+        deliveries = [
+            {
+                "target_type": "user",
+                "target_id": "user-1",
+                "content": "change",
+            }
+        ]
+
+        async with settings_db.operation():
+            await settings_db.conn.execute("BEGIN IMMEDIATE")
+            await settings_db.conn.execute(
+                "UPDATE notification_settings SET github_notify = 0 "
+                "WHERE user_id = ?",
+                ("user-1",),
+            )
+            saving = asyncio.create_task(
+                check_db.insert_github_snapshot_and_outbound(
+                    repo["id"],
+                    _snapshot("second", stars=2).to_dict(),
+                    deliveries,
+                    3,
+                    previous_id,
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert saving.done() is False
+            await settings_db.conn.commit()
+
+        snapshot_id, queued = await saving
+        assert snapshot_id is not None
+        assert queued == 0
+        latest = await check_db.fetch_latest_github_snapshot(repo["id"])
+        assert latest is not None
+        assert latest["latest_commit_sha"] == "second"
+        assert await check_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 0}
+    finally:
+        await settings_db.close()
+        await check_db.close()
+
+
+async def test_digest_clear_committed_before_enqueue_blocks_stale_targets(tmp_path):
+    path = str(tmp_path / "github-digest-clear-race.db")
+    settings_db = Database(path)
+    digest_db = Database(path)
+    await settings_db.connect()
+    await digest_db.connect()
+    try:
+        await settings_db.replace_github_digest_targets(
+            [
+                {"target_type": "user", "target_id": "10001"},
+                {"target_type": "group", "target_id": "20002"},
+            ]
+        )
+
+        async with settings_db.operation():
+            await settings_db.conn.execute("BEGIN IMMEDIATE")
+            await settings_db.conn.execute("DELETE FROM github_digest_targets")
+            enqueueing = asyncio.create_task(
+                digest_db.enqueue_current_github_digest_targets(
+                    "digest body",
+                    3,
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert enqueueing.done() is False
+            await settings_db.conn.commit()
+
+        assert await enqueueing == 0
+        assert await digest_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 0}
+    finally:
+        await settings_db.close()
+        await digest_db.close()

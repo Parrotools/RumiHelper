@@ -145,8 +145,8 @@ class GitHubRepository:
         deliveries: list[dict],
         max_attempts: int,
         expected_previous_id: int,
-    ) -> int | None:
-        """CAS the latest snapshot, then queue every derived notification atomically."""
+    ) -> tuple[int | None, int]:
+        """CAS the snapshot and queue only if GitHub notifications are still enabled."""
         async with self.operation():
             try:
                 async with self.conn.execute(
@@ -177,28 +177,82 @@ class GitHubRepository:
                 ) as cursor:
                     if cursor.rowcount != 1:
                         await self.conn.commit()
-                        return None
+                        return None, 0
                     snapshot_id = int(cursor.lastrowid)
 
+                queued = 0
                 if deliveries:
-                    next_attempt_at = _now()
-                    await self.conn.executemany(
-                        "INSERT INTO outbound_messages "
-                        "(target_type, target_id, content, max_attempts, next_attempt_at) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        [
-                            (
-                                str(delivery["target_type"]),
-                                str(delivery["target_id"]),
-                                _outbound_content(delivery["content"]),
-                                max(1, int(max_attempts)),
-                                next_attempt_at,
-                            )
-                            for delivery in deliveries
-                        ],
-                    )
+                    async with self.conn.execute(
+                        "SELECT 1 "
+                        "FROM github_repositories AS repo "
+                        "JOIN notification_settings AS settings "
+                        "  ON settings.user_id = repo.owner_id "
+                        "WHERE repo.id = ? AND settings.github_notify = 1",
+                        (repo_id,),
+                    ) as cursor:
+                        notifications_enabled = await cursor.fetchone()
+                    if notifications_enabled is not None:
+                        next_attempt_at = _now()
+                        await self.conn.executemany(
+                            "INSERT INTO outbound_messages "
+                            "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            [
+                                (
+                                    str(delivery["target_type"]),
+                                    str(delivery["target_id"]),
+                                    _outbound_content(delivery["content"]),
+                                    max(1, int(max_attempts)),
+                                    next_attempt_at,
+                                )
+                                for delivery in deliveries
+                            ],
+                        )
+                        queued = len(deliveries)
                 await self.conn.commit()
-                return snapshot_id
+                return snapshot_id, queued
+            except Exception:
+                await self.conn.rollback()
+                raise
+
+    async def enqueue_current_github_digest_targets(
+        self,
+        content: str,
+        max_attempts: int,
+    ) -> int:
+        """Queue a digest to the targets that still exist when the write transaction starts."""
+        async with self.operation():
+            try:
+                await self.conn.execute("BEGIN IMMEDIATE")
+                async with self.conn.execute(
+                    "SELECT target_type, target_id "
+                    "FROM github_digest_targets WHERE enabled = 1 "
+                    "ORDER BY target_type, target_id"
+                ) as cursor:
+                    targets = await cursor.fetchall()
+                if not targets:
+                    await self.conn.commit()
+                    return 0
+
+                next_attempt_at = _now()
+                safe_content = _outbound_content(content)
+                await self.conn.executemany(
+                    "INSERT INTO outbound_messages "
+                    "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [
+                        (
+                            str(target["target_type"]),
+                            str(target["target_id"]),
+                            safe_content,
+                            max(1, int(max_attempts)),
+                            next_attempt_at,
+                        )
+                        for target in targets
+                    ],
+                )
+                await self.conn.commit()
+                return len(targets)
             except Exception:
                 await self.conn.rollback()
                 raise

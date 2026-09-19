@@ -233,23 +233,16 @@ class GitHubTracker:
             generated_at=datetime.now(self._timezone),
             timezone_info=self._timezone,
         )
-        deliveries = [
-            {
-                "target_type": target["target_type"],
-                "target_id": target["target_id"],
-                "content": message,
-            }
-            for target in targets
-        ]
         try:
-            await self._db.enqueue_outbound_messages(
-                deliveries,
+            queued = await self._db.enqueue_current_github_digest_targets(
+                message,
                 self._outbound_max_attempts,
             )
         except Exception:
-            logger.exception("GitHub 汇总写入发送队列失败 targets=%s", len(deliveries))
+            logger.exception("GitHub 汇总写入发送队列失败 targets=%s", len(targets))
             return
-        self._dispatcher.notify_queue_changed()
+        if queued:
+            self._dispatcher.notify_queue_changed()
 
     async def _check_row(
         self,
@@ -294,7 +287,7 @@ class GitHubTracker:
 
             if should_persist:
                 expected_previous_id = int(previous["id"]) if previous is not None else 0
-                snapshot_id = await self._db.insert_github_snapshot_and_outbound(
+                snapshot_id, queued = await self._db.insert_github_snapshot_and_outbound(
                     repo_id,
                     snapshot.to_dict(),
                     deliveries if queue_notifications else [],
@@ -303,7 +296,7 @@ class GitHubTracker:
                 )
                 if (
                     snapshot_id is not None
-                    and deliveries
+                    and queued
                     and self._dispatcher is not None
                 ):
                     self._dispatcher.notify_queue_changed()
