@@ -73,12 +73,25 @@ class ReportRepository:
                     period_end = str(item["period_end"])
                     delivery_content = str(item["delivery_content"])
 
+                    # Re-check the user's notification preference inside
+                    # the same write transaction as report/outbound creation. If a
+                    # concurrent /notify report off commits first, this run must not
+                    # enqueue a stale delivery.
                     async with self.conn.execute(
-                        "INSERT INTO reports "
+                        "INSERT OR IGNORE INTO reports "
                         "(owner_id, report_type, period_start, period_end, content) "
-                        "VALUES (?, ?, ?, ?, '') "
-                        "ON CONFLICT(owner_id, report_type, period_start) DO NOTHING",
-                        (owner_id, report_type, period_start, period_end),
+                        "SELECT ?, ?, ?, ?, '' "
+                        "WHERE EXISTS ("
+                        "  SELECT 1 FROM notification_settings "
+                        "  WHERE user_id = ? AND daily_report = 1"
+                        ")",
+                        (
+                            owner_id,
+                            report_type,
+                            period_start,
+                            period_end,
+                            owner_id,
+                        ),
                     ) as cursor:
                         created = cursor.rowcount == 1
 

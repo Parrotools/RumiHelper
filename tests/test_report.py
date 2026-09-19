@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import date
 
@@ -222,3 +223,107 @@ async def test_group_report_command_refuses_to_expose_private_report(monkeypatch
     assert calls == []
     assert sent == ["为了隐私，日报只能在私聊中查看。"]
     assert "private report body" not in sent[0]
+
+
+async def test_concurrent_processes_queue_daily_report_once(tmp_path):
+    path = str(tmp_path / "report-concurrency.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    first_dispatcher = FakeDispatcher()
+    second_dispatcher = FakeDispatcher()
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierReportService(ReportService):
+        async def build_daily_report(self, owner_id: str, report_date=None) -> str:
+            nonlocal barrier_count
+            barrier_count += 1
+            if barrier_count >= 2:
+                barrier_ready.set()
+            await barrier_ready.wait()
+            return await super().build_daily_report(owner_id, report_date)
+
+    try:
+        first_notifications = NotificationSettingsService(first_db)
+        second_notifications = NotificationSettingsService(second_db)
+        await first_notifications.set("user-1", daily_report=True)
+
+        first = BarrierReportService(
+            first_db,
+            first_dispatcher,
+            first_notifications,
+            timezone_name="UTC",
+        )
+        second = BarrierReportService(
+            second_db,
+            second_dispatcher,
+            second_notifications,
+            timezone_name="UTC",
+        )
+        task = {"report_date": "2030-01-02"}
+
+        await asyncio.gather(
+            first.run_scheduled_report(task),
+            second.run_scheduled_report(task),
+        )
+
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM reports",
+            (),
+        ) == {"count": 1}
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 1}
+        assert first_dispatcher.wake_calls + second_dispatcher.wake_calls == 1
+    finally:
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_report_disable_committed_before_enqueue_prevents_delivery(tmp_path):
+    path = str(tmp_path / "report-disable-race.db")
+    settings_db = Database(path)
+    report_db = Database(path)
+    await settings_db.connect()
+    await report_db.connect()
+    try:
+        notifications = NotificationSettingsService(settings_db)
+        await notifications.set("user-1", daily_report=True)
+
+        report = {
+            "owner_id": "user-1",
+            "report_type": "daily",
+            "period_start": "2030-01-02 00:00:00",
+            "period_end": "2030-01-03 00:00:00",
+            "content": "ignored",
+            "delivery_content": "daily body",
+        }
+
+        async with settings_db.operation():
+            await settings_db.conn.execute("BEGIN IMMEDIATE")
+            await settings_db.conn.execute(
+                "UPDATE notification_settings SET daily_report = 0 WHERE user_id = ?",
+                ("user-1",),
+            )
+            saving = asyncio.create_task(
+                report_db.save_reports_and_enqueue_users([report], 3)
+            )
+            await asyncio.sleep(0.05)
+            assert saving.done() is False
+            await settings_db.conn.commit()
+
+        assert await saving == 0
+        assert await report_db.fetchone(
+            "SELECT COUNT(*) AS count FROM reports",
+            (),
+        ) == {"count": 0}
+        assert await report_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 0}
+    finally:
+        await settings_db.close()
+        await report_db.close()
