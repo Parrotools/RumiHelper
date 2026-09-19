@@ -487,3 +487,126 @@ async def test_concurrent_dispatchers_claim_one_outbound_message_once(tmp_path):
     finally:
         await first_db.close()
         await second_db.close()
+
+
+async def test_long_delivery_heartbeats_lease_and_prevents_reclaim(tmp_path):
+    path = str(tmp_path / "outbound-heartbeat.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    second_calls = 0
+
+    async def slow_api(action: str, **params) -> dict:
+        entered.set()
+        await release.wait()
+        return {"message_id": 301}
+
+    async def second_api(action: str, **params) -> dict:
+        nonlocal second_calls
+        second_calls += 1
+        return {"message_id": 302}
+
+    try:
+        message_id = await first_db.enqueue_outbound_message(
+            "user",
+            "123",
+            "slow delivery",
+            3,
+        )
+        first = MessageDispatcher(
+            first_db,
+            api_caller=slow_api,
+            lease_seconds=1.0,
+        )
+        second = MessageDispatcher(
+            second_db,
+            api_caller=second_api,
+            lease_seconds=1.0,
+        )
+
+        running = asyncio.create_task(first.process_outbound_messages(limit=1))
+        await entered.wait()
+        await asyncio.sleep(1.2)
+
+        assert await second.process_outbound_messages(limit=1) == 0
+        assert second_calls == 0
+        in_flight = await second_db.fetchone(
+            "SELECT status, attempts, lease_token FROM outbound_messages WHERE id = ?",
+            (message_id,),
+        )
+        assert in_flight["status"] == "sending"
+        assert in_flight["attempts"] == 1
+        assert in_flight["lease_token"]
+
+        release.set()
+        assert await running == 1
+        done = await first_db.fetchone(
+            "SELECT status, attempts, message_id, lease_token "
+            "FROM outbound_messages WHERE id = ?",
+            (message_id,),
+        )
+        assert done == {
+            "status": "sent",
+            "attempts": 1,
+            "message_id": "301",
+            "lease_token": None,
+        }
+    finally:
+        release.set()
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_stale_outbound_lease_owner_cannot_finalize_after_reclaim(db):
+    message_id = await db.enqueue_outbound_message(
+        "user",
+        "123",
+        "ownership",
+        3,
+    )
+    first = await db.claim_outbound_message(
+        "2030-01-01 00:00:10.000000",
+        "2030-01-01 00:00:00.000000",
+    )
+    assert first is not None
+    first_token = first["lease_token"]
+
+    await db.execute(
+        "UPDATE outbound_messages SET locked_at = ? WHERE id = ?",
+        ("2030-01-01 00:00:00.000000", message_id),
+    )
+    second = await db.claim_outbound_message(
+        "2030-01-01 00:00:20.000000",
+        "2030-01-01 00:00:10.000000",
+    )
+    assert second is not None
+    second_token = second["lease_token"]
+    assert second_token != first_token
+
+    assert await db.mark_outbound_message_sent(
+        message_id,
+        "2030-01-01 00:00:21.000000",
+        "old-owner",
+        lease_token=first_token,
+    ) is False
+    row = await db.fetchone(
+        "SELECT status, attempts, message_id, lease_token "
+        "FROM outbound_messages WHERE id = ?",
+        (message_id,),
+    )
+    assert row == {
+        "status": "sending",
+        "attempts": 2,
+        "message_id": None,
+        "lease_token": second_token,
+    }
+
+    assert await db.mark_outbound_message_sent(
+        message_id,
+        "2030-01-01 00:00:22.000000",
+        "new-owner",
+        lease_token=second_token,
+    ) is True

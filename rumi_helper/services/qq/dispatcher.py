@@ -196,39 +196,101 @@ class MessageDispatcher:
         for _ in range(max(1, limit)):
             now = datetime.now(UTC)
             row = await self._db.claim_outbound_message(
-                now.strftime("%Y-%m-%d %H:%M:%S"),
-                (now - timedelta(seconds=self._lease_seconds)).strftime("%Y-%m-%d %H:%M:%S"),
+                self._lease_timestamp(now),
+                self._lease_timestamp(now - timedelta(seconds=self._lease_seconds)),
             )
             if row is None:
                 break
-            result = await self._send(str(row["target_type"]), str(row["target_id"]), str(row["content"]))
-            processed += 1
-            if result.success:
-                await self._db.mark_outbound_message_sent(
-                    int(row["id"]), datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"), result.message_id
-                )
-            else:
-                pause_seconds = await self._remaining_pause_seconds()
-                retry_at = datetime.now(UTC) + timedelta(
-                    seconds=max(self._retry_delay_seconds, pause_seconds)
-                )
-                retry_at_text = retry_at.strftime("%Y-%m-%d %H:%M:%S")
-                await self._db.retry_outbound_message(
-                    int(row["id"]),
-                    int(row["attempts"]),
-                    int(row["max_attempts"]),
-                    retry_at_text,
-                    result.error or "发送失败",
-                )
-                if pause_seconds > 0:
-                    # Persist the cooldown on every queued item. The in-memory
-                    # circuit breaker is lost on restart, but next_attempt_at is not.
-                    await self._db.defer_outbound_messages(retry_at_text)
-                    break
-            await self._prune_terminal_history()
-            if self._stopping:
+
+            message_id = int(row["id"])
+            lease_token = str(row.get("lease_token") or "")
+            if not lease_token:
+                logger.error("主动消息领取缺少 lease token message_id=%s", message_id)
                 break
+
+            heartbeat_stop = asyncio.Event()
+            heartbeat = asyncio.create_task(
+                self._lease_heartbeat(message_id, lease_token, heartbeat_stop),
+                name=f"outbound-lease-{message_id}",
+            )
+            try:
+                result = await self._send(
+                    str(row["target_type"]),
+                    str(row["target_id"]),
+                    str(row["content"]),
+                )
+                processed += 1
+                owned = False
+                if result.success:
+                    owned = await self._db.mark_outbound_message_sent(
+                        message_id,
+                        self._lease_timestamp(datetime.now(UTC)),
+                        result.message_id,
+                        lease_token=lease_token,
+                    )
+                else:
+                    pause_seconds = await self._remaining_pause_seconds()
+                    retry_at = datetime.now(UTC) + timedelta(
+                        seconds=max(self._retry_delay_seconds, pause_seconds)
+                    )
+                    retry_at_text = retry_at.strftime("%Y-%m-%d %H:%M:%S")
+                    owned = await self._db.retry_outbound_message(
+                        message_id,
+                        int(row["attempts"]),
+                        int(row["max_attempts"]),
+                        retry_at_text,
+                        result.error or "发送失败",
+                        lease_token=lease_token,
+                    )
+                    if owned and pause_seconds > 0:
+                        # Persist the cooldown on every queued item. The in-memory
+                        # circuit breaker is lost on restart, but next_attempt_at is not.
+                        await self._db.defer_outbound_messages(retry_at_text)
+
+                if not owned:
+                    logger.warning(
+                        "主动消息 lease 已转移，忽略旧 worker 的终态更新 message_id=%s",
+                        message_id,
+                    )
+                await self._prune_terminal_history()
+                if self._stopping:
+                    break
+            finally:
+                heartbeat_stop.set()
+                await asyncio.gather(heartbeat, return_exceptions=True)
         return processed
+
+    @staticmethod
+    def _lease_timestamp(value: datetime) -> str:
+        return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    async def _lease_heartbeat(
+        self,
+        message_id: int,
+        lease_token: str,
+        stop: asyncio.Event,
+    ) -> None:
+        interval = max(0.2, self._lease_seconds / 3.0)
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                pass
+            try:
+                renewed = await self._db.renew_outbound_message_lease(
+                    message_id,
+                    lease_token,
+                    self._lease_timestamp(datetime.now(UTC)),
+                )
+                if not renewed:
+                    return
+            except Exception as exc:  # noqa: BLE001 - a later heartbeat may recover
+                logger.warning(
+                    "主动消息 lease 续租失败 message_id=%s error=%s",
+                    message_id,
+                    type(exc).__name__,
+                )
 
     async def _call_api(self, action: str, **params) -> dict:
         if self._api_caller is not None:

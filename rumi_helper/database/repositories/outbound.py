@@ -1,5 +1,7 @@
 """Database methods for OutboundRepository."""
 
+import secrets
+
 from rumi_helper.database.repositories.common import _now, _outbound_content
 
 
@@ -61,6 +63,7 @@ class OutboundRepository:
                 raise
 
     async def claim_outbound_message(self, now: str, lease_before: str) -> dict | None:
+        lease_token = secrets.token_urlsafe(24)
         async with self.operation():
             async with self.conn.execute(
                 "SELECT id FROM outbound_messages WHERE "
@@ -73,17 +76,32 @@ class OutboundRepository:
                 return None
             message_id = int(row["id"])
             async with self.conn.execute(
-                "UPDATE outbound_messages SET status = 'sending', attempts = attempts + 1, locked_at = ? "
+                "UPDATE outbound_messages SET status = 'sending', attempts = attempts + 1, "
+                "locked_at = ?, lease_token = ? "
                 "WHERE id = ? AND "
                 "((status IN ('pending', 'retry') AND next_attempt_at <= ?) "
                 "OR (status = 'sending' AND locked_at <= ?))",
-                (now, message_id, now, lease_before),
+                (now, lease_token, message_id, now, lease_before),
             ) as cursor:
                 await self.conn.commit()
                 if cursor.rowcount != 1:
                     # Another process may still win the race outside this Bot process.
                     return None
             return await self.fetchone("SELECT * FROM outbound_messages WHERE id = ?", (message_id,))
+
+    async def renew_outbound_message_lease(
+        self,
+        message_id: int,
+        lease_token: str,
+        locked_at: str,
+    ) -> bool:
+        async with self.operation(), self.conn.execute(
+            "UPDATE outbound_messages SET locked_at = ? "
+            "WHERE id = ? AND status = 'sending' AND lease_token = ?",
+            (str(locked_at), int(message_id), str(lease_token)),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
 
     async def defer_outbound_messages(self, not_before: str) -> None:
         """Push existing queued items behind a cooldown boundary."""
@@ -105,28 +123,77 @@ class OutboundRepository:
             (paused_until, paused_until),
         )
 
-    async def mark_outbound_message_sent(self, message_id: int, sent_at: str, qq_message_id: str | None) -> None:
-        await self.execute(
-            "UPDATE outbound_messages SET status = 'sent', sent_at = ?, message_id = ?, locked_at = NULL, "
-            "last_error = NULL, content = '' WHERE id = ?",
-            (sent_at, qq_message_id, message_id),
-        )
+    async def mark_outbound_message_sent(
+        self,
+        message_id: int,
+        sent_at: str,
+        qq_message_id: str | None,
+        *,
+        lease_token: str | None = None,
+    ) -> bool:
+        if lease_token is None:
+            sql = (
+                "UPDATE outbound_messages SET status = 'sent', sent_at = ?, message_id = ?, "
+                "locked_at = NULL, lease_token = NULL, last_error = NULL, content = '' "
+                "WHERE id = ?"
+            )
+            params = (sent_at, qq_message_id, int(message_id))
+        else:
+            sql = (
+                "UPDATE outbound_messages SET status = 'sent', sent_at = ?, message_id = ?, "
+                "locked_at = NULL, lease_token = NULL, last_error = NULL, content = '' "
+                "WHERE id = ? AND status = 'sending' AND lease_token = ?"
+            )
+            params = (sent_at, qq_message_id, int(message_id), str(lease_token))
+        async with self.operation(), self.conn.execute(sql, params) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
 
     async def retry_outbound_message(
-        self, message_id: int, attempts: int, max_attempts: int, next_attempt_at: str, error: str
-    ) -> None:
+        self,
+        message_id: int,
+        attempts: int,
+        max_attempts: int,
+        next_attempt_at: str,
+        error: str,
+        *,
+        lease_token: str | None = None,
+    ) -> bool:
         if attempts >= max_attempts:
-            await self.execute(
-                "UPDATE outbound_messages SET status = 'failed', locked_at = NULL, last_error = ?, "
-                "content = '' WHERE id = ?",
-                (error[:500], message_id),
+            if lease_token is None:
+                sql = (
+                    "UPDATE outbound_messages SET status = 'failed', locked_at = NULL, "
+                    "lease_token = NULL, last_error = ?, content = '' WHERE id = ?"
+                )
+                params = (error[:500], int(message_id))
+            else:
+                sql = (
+                    "UPDATE outbound_messages SET status = 'failed', locked_at = NULL, "
+                    "lease_token = NULL, last_error = ?, content = '' "
+                    "WHERE id = ? AND status = 'sending' AND lease_token = ?"
+                )
+                params = (error[:500], int(message_id), str(lease_token))
+        elif lease_token is None:
+            sql = (
+                "UPDATE outbound_messages SET status = 'retry', next_attempt_at = ?, "
+                "locked_at = NULL, lease_token = NULL, last_error = ? WHERE id = ?"
             )
-            return
-        await self.execute(
-            "UPDATE outbound_messages SET status = 'retry', next_attempt_at = ?, locked_at = NULL, last_error = ? "
-            "WHERE id = ?",
-            (next_attempt_at, error[:500], message_id),
-        )
+            params = (next_attempt_at, error[:500], int(message_id))
+        else:
+            sql = (
+                "UPDATE outbound_messages SET status = 'retry', next_attempt_at = ?, "
+                "locked_at = NULL, lease_token = NULL, last_error = ? "
+                "WHERE id = ? AND status = 'sending' AND lease_token = ?"
+            )
+            params = (
+                next_attempt_at,
+                error[:500],
+                int(message_id),
+                str(lease_token),
+            )
+        async with self.operation(), self.conn.execute(sql, params) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
 
     async def prune_terminal_outbound_messages(self, limit: int) -> None:
         limit = max(0, int(limit))
