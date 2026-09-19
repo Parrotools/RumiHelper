@@ -5,7 +5,6 @@ This module intentionally avoids network calls and never prints credential value
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import socket
@@ -20,6 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 from rumi_helper.config import Settings
 from rumi_helper.personality.manager import PersonalityConfigError, PersonalityManager
 from rumi_helper.promptlib import load_prompt
+from rumi_helper.security.config import is_loopback_host
 
 CheckStatus = Literal["PASS", "WARN", "FAIL"]
 _REQUIRED_PROMPTS = ("agent.txt", "chat.txt", "webpage_summary.txt")
@@ -102,6 +102,10 @@ def _check_llm_url(settings: Settings) -> DoctorCheck:
         return DoctorCheck("llm_url", "FAIL", "LLM_BASE_URL 无法解析")
     if url.scheme not in {"http", "https"} or not url.host:
         return DoctorCheck("llm_url", "FAIL", "LLM_BASE_URL 必须是 http(s) URL")
+    if url.userinfo:
+        return DoctorCheck("llm_url", "FAIL", "LLM_BASE_URL 不允许包含用户名或密码")
+    if url.query or url.fragment:
+        return DoctorCheck("llm_url", "FAIL", "LLM_BASE_URL 不允许包含 query 或 fragment")
     return DoctorCheck("llm_url", "PASS", f"{url.scheme}://{url.host}")
 
 
@@ -137,22 +141,12 @@ def _check_credentials(settings: Settings) -> list[DoctorCheck]:
     return checks
 
 
-def _is_loopback_host(host: str) -> bool:
-    value = str(host).strip().lower().strip("[]")
-    if value == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(value).is_loopback
-    except ValueError:
-        return False
-
-
 def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
 
     if settings.onebot_access_token.strip():
         checks.append(DoctorCheck("onebot_exposure", "PASS", "OneBot 鉴权已启用"))
-    elif _is_loopback_host(settings.host):
+    elif is_loopback_host(settings.host):
         checks.append(
             DoctorCheck(
                 "onebot_exposure",
@@ -177,7 +171,7 @@ def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
         settings.llm_api_key.strip()
         and llm_url.scheme == "http"
         and llm_url.host
-        and not _is_loopback_host(llm_url.host)
+        and not is_loopback_host(llm_url.host)
     ):
         checks.append(
             DoctorCheck(

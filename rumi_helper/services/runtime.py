@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from rumi_helper.config import Settings, get_settings
 from rumi_helper.database.db import Database
 from rumi_helper.personality.manager import PersonalityManager
+from rumi_helper.security.config import validate_runtime_security
 from rumi_helper.security.permissions import PermissionService
 from rumi_helper.services.agent import AgentHarness
 from rumi_helper.services.github.client import GitHubClient
@@ -120,6 +121,7 @@ async def _init_runtime_unlocked() -> Runtime:
         return _runtime
 
     settings = get_settings()
+    validate_runtime_security(settings)
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

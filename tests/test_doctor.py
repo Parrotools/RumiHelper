@@ -1,6 +1,8 @@
 import os
 import socket
 
+import pytest
+
 from rumi_helper.config import Settings
 from rumi_helper.doctor import main, run_checks
 
@@ -128,6 +130,26 @@ def test_doctor_allows_authenticated_non_loopback_bind(tmp_path):
         )
     )
     assert statuses["onebot_exposure"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:password@llm.example.com/v1",
+        "https://llm.example.com/v1?token=secret",
+        "https://llm.example.com/v1#fragment",
+    ],
+)
+def test_doctor_rejects_sensitive_or_ambiguous_llm_base_urls(tmp_path, url):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                llm_base_url=url,
+            )
+        )
+    )
+    assert statuses["llm_url"] == "FAIL"
 
 
 def test_doctor_rejects_remote_plain_http_llm_with_api_key(tmp_path):
