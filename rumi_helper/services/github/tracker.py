@@ -4,11 +4,13 @@ import asyncio
 import logging
 import re
 import weakref
+from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from rumi_helper.database.db import Database
+from rumi_helper.security.permissions import notification_target_requires_admin
 from rumi_helper.services.github.models import GitHubRepoRef, GitHubSnapshot
 from rumi_helper.services.notifications import NotificationSettingsService
 from rumi_helper.utils import truncate_for_qq
@@ -104,6 +106,7 @@ class GitHubTracker:
         timezone_name: str = "Asia/Shanghai",
         outbound_max_attempts: int = 3,
         max_repositories_per_user: int = 50,
+        is_admin: Callable[[str], bool] | None = None,
     ):
         self._db = db
         self._client = client
@@ -112,6 +115,7 @@ class GitHubTracker:
         self._timezone = ZoneInfo(timezone_name)
         self._outbound_max_attempts = max(1, int(outbound_max_attempts))
         self._max_repositories_per_user = max(1, int(max_repositories_per_user))
+        self._is_admin = is_admin
         self._repo_check_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -285,7 +289,7 @@ class GitHubTracker:
                             "target_id": target["target_id"],
                             "content": message,
                         }
-                        for target in await self._db.fetch_github_notifications(repo_id)
+                        for target in await self._authorized_notification_targets(repo)
                     ]
 
             if should_persist:
@@ -310,12 +314,49 @@ class GitHubTracker:
         target_type, separator, target_id = target.partition(":")
         if not separator or target_type not in ("user", "group") or not target_id.isdigit():
             raise GitHubTrackerError("通知目标应为 user:QQ号 或 group:群号")
+        if (
+            self._is_admin is not None
+            and notification_target_requires_admin(str(owner_id), target_type, target_id)
+            and not self._is_admin(str(owner_id))
+        ):
+            raise GitHubTrackerError(
+                "普通用户只能把 GitHub 通知发送给自己的私聊"
+            )
         if not await self._db.upsert_github_notification(
             repo["id"],
             target_type,
             target_id,
         ):
             raise GitHubTrackerError("该仓库已被删除，请重新添加后再设置通知")
+
+    async def _authorized_notification_targets(self, repo: dict) -> list[dict]:
+        targets = await self._db.fetch_github_notifications(int(repo["id"]))
+        if self._is_admin is None or self._is_admin(str(repo["owner_id"])):
+            return targets
+
+        allowed: list[dict] = []
+        for target in targets:
+            if notification_target_requires_admin(
+                str(repo["owner_id"]),
+                str(target["target_type"]),
+                str(target["target_id"]),
+            ):
+                await self._db.upsert_github_notification(
+                    int(repo["id"]),
+                    str(target["target_type"]),
+                    str(target["target_id"]),
+                    False,
+                )
+                logger.warning(
+                    "已禁用失去管理员权限的 GitHub 通知目标 repo_id=%s owner=%s target=%s:%s",
+                    repo["id"],
+                    repo["owner_id"],
+                    target["target_type"],
+                    target["target_id"],
+                )
+                continue
+            allowed.append(target)
+        return allowed
 
     async def _get_owned_repository(self, owner_id: str, url: str) -> dict:
         ref = parse_repo_url(url)

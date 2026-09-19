@@ -140,6 +140,7 @@ async def _init_runtime_unlocked() -> Runtime:
             timezone_name=settings.scheduler_timezone,
             outbound_max_attempts=settings.outbound_max_attempts,
             max_repositories_per_user=settings.max_github_repositories_per_user,
+            is_admin=permission.is_admin,
         )
         report = ReportService(
             db,

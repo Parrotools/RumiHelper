@@ -939,3 +939,74 @@ async def test_watch_cannot_create_orphan_notification_after_repository_delete(t
         release_upsert.set()
         await watch_db.close()
         await delete_db.close()
+
+
+async def test_tracker_watch_rejects_privileged_target_for_non_admin(db):
+    tracker = GitHubTracker(
+        db,
+        FakeGitHubClient(_snapshot("first")),
+        is_admin=lambda _user_id: False,
+    )
+    repo = await tracker.add_repository(
+        "10001",
+        "https://github.com/OpenAI/openai-python",
+    )
+
+    await tracker.watch("10001", repo["repo_url"], "user:10001")
+
+    with pytest.raises(GitHubTrackerError, match="只能"):
+        await tracker.watch("10001", repo["repo_url"], "group:123")
+
+    with pytest.raises(GitHubTrackerError, match="只能"):
+        await tracker.watch("10001", repo["repo_url"], "user:999")
+
+
+async def test_revoked_admin_github_targets_are_disabled_before_delivery(db):
+    admins = {"10001"}
+    client = FakeGitHubClient(_snapshot("first"))
+    dispatcher = FakeDispatcher()
+    notifications = NotificationSettingsService(db)
+    await notifications.set("10001", github_notify=True)
+    tracker = GitHubTracker(
+        db,
+        client,
+        dispatcher,
+        notifications,
+        is_admin=lambda user_id: user_id in admins,
+    )
+    repo = await tracker.add_repository(
+        "10001",
+        "https://github.com/OpenAI/openai-python",
+    )
+    await tracker.watch("10001", repo["repo_url"], "user:10001")
+    await tracker.watch("10001", repo["repo_url"], "user:999")
+    await tracker.watch("10001", repo["repo_url"], "group:123")
+    await tracker.check("10001", repo["repo_url"])
+
+    admins.clear()
+    client.snapshot = _snapshot("second", stars=2)
+    await tracker.run_scheduled_check({})
+
+    outbound = await db.fetchall(
+        "SELECT target_type, target_id, status FROM outbound_messages ORDER BY id",
+        (),
+    )
+    assert outbound == [
+        {"target_type": "user", "target_id": "10001", "status": "pending"}
+    ]
+    enabled_targets = await db.fetch_github_notifications(repo["id"])
+    assert [
+        (target["target_type"], target["target_id"])
+        for target in enabled_targets
+    ] == [("user", "10001")]
+    all_targets = await db.fetchall(
+        "SELECT target_type, target_id, enabled FROM github_notifications "
+        "WHERE repo_id = ? ORDER BY target_type, target_id",
+        (repo["id"],),
+    )
+    assert all_targets == [
+        {"target_type": "group", "target_id": "123", "enabled": 0},
+        {"target_type": "user", "target_id": "10001", "enabled": 1},
+        {"target_type": "user", "target_id": "999", "enabled": 0},
+    ]
+    assert dispatcher.wake_calls == 1
