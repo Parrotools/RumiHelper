@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import rumi_helper.database.repositories.agent_actions as agent_actions_repository
 from rumi_helper.database.db import Database
 from rumi_helper.services.agent.harness import AgentHarness, _parse_plan
 from rumi_helper.services.qq.dispatcher import BroadcastReport, SendResult
@@ -858,3 +859,65 @@ async def test_agent_rejects_oversized_broadcast_before_confirmation(db):
         "SELECT COUNT(*) AS count FROM pending_agent_actions",
         (),
     ) == {"count": 0}
+
+
+@pytest.mark.asyncio
+async def test_terminal_agent_action_history_is_bounded(db, monkeypatch):
+    monkeypatch.setattr(
+        agent_actions_repository,
+        "_AGENT_ACTION_TERMINAL_HISTORY_LIMIT",
+        2,
+    )
+    terminal_ids: list[int] = []
+    for index in range(4):
+        action_id = await db.create_pending_agent_action(
+            "user-1",
+            "private:user-1",
+            "memory_save",
+            f'{{"content":"secret-{index}"}}',
+            f"summary-{index}",
+            "9999-01-01T00:00:00+00:00",
+        )
+        claimed = await db.claim_pending_agent_action(
+            "user-1",
+            "private:user-1",
+            "2000-01-01T00:00:00+00:00",
+        )
+        assert claimed is not None and claimed["id"] == action_id
+        assert await db.finish_pending_agent_action(action_id, "confirmed")
+        terminal_ids.append(action_id)
+
+    pending_id = await db.create_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "memory_save",
+        '{"content":"still pending"}',
+        "still pending",
+        "9999-01-01T00:00:00+00:00",
+    )
+
+    rows = await db.fetchall(
+        "SELECT id, status, arguments, summary "
+        "FROM pending_agent_actions ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {
+            "id": terminal_ids[-2],
+            "status": "confirmed",
+            "arguments": "{}",
+            "summary": "",
+        },
+        {
+            "id": terminal_ids[-1],
+            "status": "confirmed",
+            "arguments": "{}",
+            "summary": "",
+        },
+        {
+            "id": pending_id,
+            "status": "pending",
+            "arguments": '{"content":"still pending"}',
+            "summary": "still pending",
+        },
+    ]

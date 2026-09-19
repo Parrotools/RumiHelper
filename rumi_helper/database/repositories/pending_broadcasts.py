@@ -11,9 +11,28 @@ _PENDING_CONFIRMED = "confirmed"
 _PENDING_FAILED = "failed"
 _PENDING_CANCELLED = "cancelled"
 _PENDING_EXPIRED = "expired"
+_BROADCAST_TERMINAL_HISTORY_LIMIT = 5000
 
 
 class PendingBroadcastRepository:
+    async def _prune_terminal_broadcasts_unlocked(self) -> None:
+        limit = max(0, int(_BROADCAST_TERMINAL_HISTORY_LIMIT))
+        if limit == 0:
+            await self.conn.execute(
+                "DELETE FROM pending_broadcasts "
+                "WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed')"
+            )
+            return
+        await self.conn.execute(
+            "DELETE FROM pending_broadcasts "
+            "WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed') "
+            "AND id NOT IN ("
+            "  SELECT id FROM pending_broadcasts "
+            "  WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed') "
+            "  ORDER BY id DESC LIMIT ?"
+            ")",
+            (limit,),
+        )
     async def create_pending_broadcast(
         self,
         admin_id: str,
@@ -45,6 +64,7 @@ class PendingBroadcastRepository:
                         expires_at,
                     ),
                 )
+                await self._prune_terminal_broadcasts_unlocked()
                 await self.conn.commit()
             except Exception:
                 await self.conn.rollback()
@@ -67,6 +87,7 @@ class PendingBroadcastRepository:
                     "WHERE id = ? AND status = ?",
                     (_PENDING_EXPIRED, row["id"], _PENDING_ACTIVE),
                 )
+                await self._prune_terminal_broadcasts_unlocked()
                 await self.conn.commit()
                 return None
             row["targets"] = json.loads(row["targets_json"])
@@ -92,6 +113,7 @@ class PendingBroadcastRepository:
                 "WHERE id = ? AND status = ? AND expires_at <= ?",
                 (_PENDING_EXPIRED, pending_id, _PENDING_ACTIVE, now),
             )
+            await self._prune_terminal_broadcasts_unlocked()
             await self.conn.commit()
             return False
 
@@ -103,8 +125,10 @@ class PendingBroadcastRepository:
             "WHERE status = ? AND expires_at <= ?",
             (_PENDING_FAILED, _PENDING_EXECUTING, str(now)),
         ) as cursor:
-            await self.conn.commit()
-            return cursor.rowcount
+            changed = cursor.rowcount
+        await self._prune_terminal_broadcasts_unlocked()
+        await self.conn.commit()
+        return changed
 
     async def finish_pending(self, pending_id: int, status: str) -> bool:
         """Move a pending broadcast into a valid terminal state."""
@@ -122,5 +146,7 @@ class PendingBroadcastRepository:
             "WHERE id = ? AND status = ?",
             (status, pending_id, previous),
         ) as cursor:
-            await self.conn.commit()
-            return cursor.rowcount > 0
+            changed = cursor.rowcount > 0
+        await self._prune_terminal_broadcasts_unlocked()
+        await self.conn.commit()
+        return changed

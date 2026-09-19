@@ -1,7 +1,28 @@
 """Database methods for AgentActionRepository."""
 
+_AGENT_ACTION_TERMINAL_HISTORY_LIMIT = 5000
+
 
 class AgentActionRepository:
+    async def _prune_terminal_agent_actions_unlocked(self) -> None:
+        limit = max(0, int(_AGENT_ACTION_TERMINAL_HISTORY_LIMIT))
+        if limit == 0:
+            await self.conn.execute(
+                "DELETE FROM pending_agent_actions "
+                "WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed')"
+            )
+            return
+        await self.conn.execute(
+            "DELETE FROM pending_agent_actions "
+            "WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed') "
+            "AND id NOT IN ("
+            "  SELECT id FROM pending_agent_actions "
+            "  WHERE status IN ('confirmed', 'cancelled', 'expired', 'failed') "
+            "  ORDER BY id DESC LIMIT ?"
+            ")",
+            (limit,),
+        )
+
     async def create_pending_agent_action(
         self,
         user_id: str,
@@ -32,6 +53,7 @@ class AgentActionRepository:
                         expires_at,
                     ),
                 )
+                await self._prune_terminal_agent_actions_unlocked()
                 await self.conn.commit()
             except Exception:
                 await self.conn.rollback()
@@ -63,6 +85,7 @@ class AgentActionRepository:
             "WHERE user_id = ? AND session_key = ? AND status = 'pending' AND expires_at <= ?",
             (str(user_id), str(session_key), now),
         )
+        await self._prune_terminal_agent_actions_unlocked()
         await self.conn.commit()
         return await self.fetchone(
             "SELECT * FROM pending_agent_actions "
@@ -104,8 +127,10 @@ class AgentActionRepository:
             "WHERE status = 'executing' AND expires_at <= ?",
             (str(now),),
         ) as cursor:
-            await self.conn.commit()
-            return cursor.rowcount
+            changed = cursor.rowcount
+        await self._prune_terminal_agent_actions_unlocked()
+        await self.conn.commit()
+        return changed
 
     async def finish_pending_agent_action(self, action_id: int, status: str) -> bool:
         allowed_from = {
@@ -123,5 +148,7 @@ class AgentActionRepository:
             "WHERE id = ? AND status = ?",
             (status, int(action_id), previous_status),
         ) as cursor:
-            await self.conn.commit()
-            return cursor.rowcount == 1
+            changed = cursor.rowcount == 1
+        await self._prune_terminal_agent_actions_unlocked()
+        await self.conn.commit()
+        return changed

@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+import rumi_helper.database.repositories.pending_broadcasts as broadcast_repository
 from rumi_helper.database.db import Database
 
 
@@ -161,4 +162,56 @@ async def test_recover_executing_broadcasts_only_fails_expired_executions(db):
         {"id": expired_id, "status": "failed"},
         {"id": active_id, "status": "active"},
         {"id": fresh_id, "status": "executing"},
+    ]
+
+
+async def test_terminal_broadcast_history_is_bounded(db, monkeypatch):
+    monkeypatch.setattr(
+        broadcast_repository,
+        "_BROADCAST_TERMINAL_HISTORY_LIMIT",
+        2,
+    )
+    terminal_ids: list[int] = []
+    for index in range(4):
+        pending_id = await db.create_pending_broadcast(
+            f"admin-{index}",
+            [{"type": "user", "id": str(100 + index)}],
+            f"secret-{index}",
+            ttl_seconds=300,
+        )
+        assert await db.claim_pending(pending_id)
+        assert await db.finish_pending(pending_id, "confirmed")
+        terminal_ids.append(pending_id)
+
+    active_id = await db.create_pending_broadcast(
+        "admin-active",
+        [{"type": "user", "id": "999"}],
+        "still active",
+        ttl_seconds=300,
+    )
+
+    rows = await db.fetchall(
+        "SELECT id, status, targets_json, content "
+        "FROM pending_broadcasts ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {
+            "id": terminal_ids[-2],
+            "status": "confirmed",
+            "targets_json": "[]",
+            "content": "",
+        },
+        {
+            "id": terminal_ids[-1],
+            "status": "confirmed",
+            "targets_json": "[]",
+            "content": "",
+        },
+        {
+            "id": active_id,
+            "status": "active",
+            "targets_json": '[{"type": "user", "id": "999"}]',
+            "content": "still active",
+        },
     ]
