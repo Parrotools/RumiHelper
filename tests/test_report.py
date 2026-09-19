@@ -327,3 +327,59 @@ async def test_report_disable_committed_before_enqueue_prevents_delivery(tmp_pat
     finally:
         await settings_db.close()
         await report_db.close()
+
+
+async def test_concurrent_report_services_enqueue_period_once(tmp_path):
+    path = str(tmp_path / "report-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierReportService(ReportService):
+        async def build_daily_report(self, owner_id: str, report_date: date | None = None) -> str:
+            nonlocal barrier_count
+            content = await super().build_daily_report(owner_id, report_date)
+            barrier_count += 1
+            if barrier_count >= 2:
+                barrier_ready.set()
+            await barrier_ready.wait()
+            return content
+
+    try:
+        await NotificationSettingsService(first_db).set("user-1", daily_report=True)
+        first_dispatcher = FakeDispatcher()
+        second_dispatcher = FakeDispatcher()
+        first = BarrierReportService(
+            first_db,
+            first_dispatcher,
+            NotificationSettingsService(first_db),
+            timezone_name="UTC",
+        )
+        second = BarrierReportService(
+            second_db,
+            second_dispatcher,
+            NotificationSettingsService(second_db),
+            timezone_name="UTC",
+        )
+        task = {"report_date": "2030-01-02"}
+
+        await asyncio.gather(
+            first.run_scheduled_report(task),
+            second.run_scheduled_report(task),
+        )
+
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM reports",
+            (),
+        ) == {"count": 1}
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 1}
+        assert first_dispatcher.wake_calls + second_dispatcher.wake_calls == 1
+    finally:
+        await first_db.close()
+        await second_db.close()
