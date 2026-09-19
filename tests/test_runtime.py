@@ -5,6 +5,7 @@ import pytest
 
 import rumi_helper.services.runtime as runtime_module
 from rumi_helper.config import Settings
+from rumi_helper.config_validation import RuntimeConfigurationError
 from rumi_helper.database.db import Database
 from rumi_helper.security.config import SecurityConfigurationError
 
@@ -370,6 +371,36 @@ async def test_init_runtime_rejects_unsafe_config_before_opening_database(
     monkeypatch.setattr(runtime_module, "Database", TrackingDatabase)
 
     with pytest.raises(SecurityConfigurationError, match="ONEBOT_ACCESS_TOKEN"):
+        await runtime_module.init_runtime()
+
+    assert runtime_module._runtime is None
+    assert TrackingDatabase.instances == []
+
+
+@pytest.mark.asyncio
+async def test_init_runtime_rejects_invalid_limits_before_creating_resources(
+    tmp_path,
+    monkeypatch,
+):
+    settings = Settings(
+        _env_file=None,
+        database_path=str(tmp_path / "must-not-exist.db"),
+        send_rate_limit_per_second=0,
+        github_check_cron="",
+        github_digest_cron="",
+        daily_report_cron="",
+    )
+    TrackingDatabase.instances.clear()
+
+    monkeypatch.setattr(runtime_module, "_runtime", None)
+    monkeypatch.setattr(runtime_module, "_runtime_lock", asyncio.Lock())
+    monkeypatch.setattr(runtime_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(runtime_module, "Database", TrackingDatabase)
+
+    with pytest.raises(
+        RuntimeConfigurationError,
+        match="send_rate_limit_per_second",
+    ):
         await runtime_module.init_runtime()
 
     assert runtime_module._runtime is None

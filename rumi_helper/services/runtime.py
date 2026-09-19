@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from rumi_helper.config import Settings, get_settings
+from rumi_helper.config_validation import validate_runtime_limits
 from rumi_helper.database.db import Database
 from rumi_helper.personality.manager import PersonalityManager
 from rumi_helper.security.config import validate_runtime_security
@@ -122,6 +123,7 @@ async def _init_runtime_unlocked() -> Runtime:
 
     settings = get_settings()
     validate_runtime_security(settings)
+    validate_runtime_limits(settings)
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
