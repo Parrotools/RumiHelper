@@ -3,7 +3,11 @@
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from rumi_helper.services.github.tracker import format_check_result, parse_repo_url
+from rumi_helper.services.github.tracker import (
+    GitHubTrackerError,
+    format_check_result,
+    parse_repo_url,
+)
 from rumi_helper.services.health import format_status
 from rumi_helper.services.qq.broadcast_parser import BroadcastFormatError, parse_targets
 from rumi_helper.services.report import ReportError
@@ -20,14 +24,20 @@ async def github_add(runtime: Any, user_id: str, arguments: dict[str, Any], sess
 async def github_remove(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
     del session_key
     if not await runtime.github.remove_repository(user_id, arguments["url"]):
-        from rumi_helper.services.github.tracker import GitHubTrackerError
-
         raise GitHubTrackerError("该仓库尚未添加")
     return "已移除仓库。"
 
 
+def _require_private_github_config(session_key: str) -> None:
+    if str(session_key).startswith("group:"):
+        raise GitHubTrackerError(
+            "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+        )
+
+
 async def github_list(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del arguments, session_key
+    del arguments
+    _require_private_github_config(session_key)
     repos = await runtime.github.list_repositories(user_id)
     if not repos:
         return "你还没有添加 GitHub 仓库。"
@@ -69,7 +79,8 @@ def _bounded_targets(runtime: Any, raw: str):
 
 
 async def github_digest_set(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del user_id, session_key
+    del user_id
+    _require_private_github_config(session_key)
     targets = _bounded_targets(runtime, arguments["targets"])
     await runtime.db.replace_github_digest_targets([target.to_dict() for target in targets])
     await runtime.scheduler.sync_system_task("github_digest", runtime.settings.github_digest_cron)
@@ -77,7 +88,8 @@ async def github_digest_set(runtime: Any, user_id: str, arguments: dict[str, Any
 
 
 async def github_digest_list(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del user_id, arguments, session_key
+    del user_id, arguments
+    _require_private_github_config(session_key)
     targets = await runtime.db.fetch_github_digest_targets()
     if not targets:
         return "尚未设置 GitHub 定时汇总目标。"
@@ -87,7 +99,8 @@ async def github_digest_list(runtime: Any, user_id: str, arguments: dict[str, An
 
 
 async def github_digest_clear(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
-    del user_id, arguments, session_key
+    del user_id, arguments
+    _require_private_github_config(session_key)
     await runtime.db.replace_github_digest_targets([])
     await runtime.scheduler.sync_system_task("github_digest", "")
     return "GitHub 定时汇总目标已清空，定时发送已关闭。"

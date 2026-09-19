@@ -575,6 +575,37 @@ async def test_confirm_rejects_persisted_digest_target_overflow(db):
 
 
 @pytest.mark.asyncio
+async def test_confirm_rejects_persisted_group_digest_configuration(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"none","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+    session_key = "group:30000:admin"
+    action_id = await db.create_pending_agent_action(
+        "admin",
+        session_key,
+        "github_digest_set",
+        json.dumps({"targets": "user:123456"}, ensure_ascii=False),
+        "tampered group digest",
+        "9999-01-01T00:00:00+00:00",
+    )
+    event = SimpleNamespace(user_id="admin", group_id="30000")
+
+    result = await harness.confirm(runtime=runtime, event=event)
+
+    assert result == "执行失败：为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+    assert await db.fetch_github_digest_targets() == []
+    assert runtime.scheduler.calls == []
+    row = await db.fetchone(
+        "SELECT status, arguments, summary FROM pending_agent_actions WHERE id = ?",
+        (action_id,),
+    )
+    assert row == {"status": "failed", "arguments": "{}", "summary": ""}
+
+
+@pytest.mark.asyncio
 async def test_pending_agent_action_replacement_is_serialized(db):
     async def create(tool_name: str) -> int:
         return await db.create_pending_agent_action(
