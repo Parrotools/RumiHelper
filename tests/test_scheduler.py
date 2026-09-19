@@ -957,3 +957,75 @@ async def test_personal_reminder_is_not_admin_gated(db):
     )
 
     assert isinstance(task_id, int)
+
+
+async def test_start_quarantines_corrupt_tasks_and_keeps_valid_jobs(db):
+    future = datetime.now(UTC) + timedelta(hours=1)
+    unknown_id = await db.create_scheduled_task(
+        "owner",
+        "unknown_task_type",
+        {},
+        "0 * * * *",
+        future.isoformat(),
+    )
+    bad_cron_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {"target_type": "user", "target_id": "user-1", "message": "bad cron"},
+        "not a cron",
+        future.isoformat(),
+    )
+    bad_payload_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {"target_type": "user", "target_id": "user-1", "message": "bad payload"},
+        None,
+        future.isoformat(),
+    )
+    await db.execute(
+        "UPDATE scheduled_tasks SET payload = ? WHERE id = ?",
+        ("not-json", bad_payload_id),
+    )
+
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    valid_id = await scheduler.create_reminder(
+        "user-1",
+        "valid",
+        run_at=future + timedelta(minutes=1),
+    )
+
+    await scheduler.start()
+    try:
+        for task_id in (unknown_id, bad_cron_id, bad_payload_id):
+            task = await db.fetch_scheduled_task(task_id)
+            assert task["enabled"] == 0
+            assert task["cron_expression"] is None
+            assert task["next_run"] is None
+            assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is None
+
+        assert scheduler._scheduler.get_job(scheduler._job_id(valid_id)) is not None
+    finally:
+        await scheduler.stop()
+
+
+async def test_run_task_quarantines_corrupt_payload_before_claim(db):
+    future = datetime.now(UTC) + timedelta(hours=1)
+    task_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {"target_type": "user", "target_id": "user-1", "message": "hello"},
+        "0 * * * *",
+        future.isoformat(),
+    )
+    await db.execute(
+        "UPDATE scheduled_tasks SET payload = ? WHERE id = ?",
+        ("[]", task_id),
+    )
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+
+    await scheduler.run_task(task_id, force=True)
+
+    task = await db.fetch_scheduled_task(task_id)
+    assert task["enabled"] == 0
+    assert task["last_run"] is None
+    assert task["next_run"] is None

@@ -127,13 +127,20 @@ class SchedulerService:
         if self._started:
             return
         for task in await self._db.fetch_enabled_scheduled_tasks():
+            if not await self._ensure_task_valid(task):
+                continue
             if not await self._ensure_task_authorized(task):
                 continue
             # Do not rewrite persisted cron next_run during startup. It is the
             # cross-process CAS marker for the current occurrence; advancing it
             # here could make a newly started process steal an occurrence that
             # another process is about to claim.
-            if not self._schedule(task):
+            try:
+                scheduled = self._schedule(task)
+            except (SchedulerValidationError, TypeError, ValueError):
+                await self._disable_invalid_task(task, "invalid_schedule")
+                continue
+            if not scheduled:
                 await self._db.mark_scheduled_task_run(
                     task["id"],
                     datetime.now(UTC).isoformat(),
@@ -303,10 +310,16 @@ class SchedulerService:
             task = await self._db.fetch_scheduled_task(task_id)
             if task is None or not task["enabled"] or not task["next_run"]:
                 return
+            if not await self._ensure_task_valid(task):
+                return
             if not await self._ensure_task_authorized(task):
                 return
 
-            scheduled_for = self._parse_datetime(task["next_run"])
+            try:
+                scheduled_for = self._parse_datetime(task["next_run"])
+            except (SchedulerValidationError, TypeError, ValueError):
+                await self._disable_invalid_task(task, "invalid_next_run")
+                return
             now = datetime.now(self._timezone)
             if not force and scheduled_for > now:
                 # A stale in-memory trigger can survive a schedule change in
@@ -314,11 +327,15 @@ class SchedulerService:
                 return
 
             cron_expression = task["cron_expression"]
-            next_run = (
-                self._next_cron_run(cron_expression).isoformat()
-                if cron_expression
-                else None
-            )
+            try:
+                next_run = (
+                    self._next_cron_run(cron_expression).isoformat()
+                    if cron_expression
+                    else None
+                )
+            except (SchedulerValidationError, TypeError, ValueError):
+                await self._disable_invalid_task(task, "invalid_cron")
+                return
             claimed = await self._db.claim_scheduled_task_run(
                 task_id,
                 str(task["next_run"]),
@@ -331,6 +348,7 @@ class SchedulerService:
                 return
 
             try:
+                payload = json.loads(task["payload"])
                 notification_field = NOTIFICATION_BY_TASK.get(task["task_type"])
                 if notification_field:
                     settings = await self._notifications.get(task["owner_id"])
@@ -338,17 +356,48 @@ class SchedulerService:
                         logger.info("通知已关闭，跳过任务 task_id=%s type=%s", task_id, task["task_type"])
                     else:
                         await self._handlers[task["task_type"]](
-                            {**task, "payload": json.loads(task["payload"])}
+                            {**task, "payload": payload}
                         )
                 else:
                     await self._handlers[task["task_type"]](
-                        {**task, "payload": json.loads(task["payload"])}
+                        {**task, "payload": payload}
                     )
             except Exception:
                 logger.exception("定时任务执行失败 task_id=%s type=%s", task_id, task["task_type"])
         finally:
             if current is not None:
                 self._active_runs.discard(current)
+
+    async def _ensure_task_valid(self, task: dict) -> bool:
+        task_type = str(task.get("task_type", ""))
+        if task_type not in self._handlers:
+            await self._disable_invalid_task(task, "unknown_task_type")
+            return False
+        try:
+            payload = json.loads(task["payload"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            await self._disable_invalid_task(task, "invalid_payload")
+            return False
+        if not isinstance(payload, dict):
+            await self._disable_invalid_task(task, "invalid_payload_type")
+            return False
+        return True
+
+    async def _disable_invalid_task(self, task: dict, reason: str) -> None:
+        task_id = int(task["id"])
+        await self._db.update_scheduled_task_schedule(
+            task_id,
+            None,
+            None,
+            False,
+        )
+        self._remove_job(task_id)
+        logger.warning(
+            "已禁用无效定时任务 task_id=%s type=%s reason=%s",
+            task_id,
+            task.get("task_type"),
+            reason,
+        )
 
     def _require_admin(self, owner_id: str) -> None:
         if self._is_admin is not None and not self._is_admin(str(owner_id)):
