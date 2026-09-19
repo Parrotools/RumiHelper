@@ -63,16 +63,29 @@ class WebSummarizer:
             {"role": "user", "content": user_content},
         ]
 
+    @staticmethod
+    def _untrusted_page_block(
+        doc: WebDocument,
+        prompt_url: str,
+        content: str,
+        *,
+        label: str,
+    ) -> str:
+        return wrap_untrusted_content(
+            f"网页标题：{doc.title or '（无标题）'}\n"
+            f"网页 URL：{prompt_url}\n\n"
+            f"{label}：\n{content}"
+        )
+
     async def summarize(self, doc: WebDocument) -> str:
         text = doc.text.strip()
         prompt_url = safe_url_for_log(doc.url)
-        body = (
-            f"网页标题：{doc.title or '（无标题）'}\n"
-            f"网页 URL：{prompt_url}\n\n网页正文：\n"
-        )
 
         if len(text) <= self._chunk_chars:
-            content = f"{_SINGLE_INSTRUCTION}\n\n{body}{wrap_untrusted_content(text)}"
+            content = (
+                f"{_SINGLE_INSTRUCTION}\n\n"
+                f"{self._untrusted_page_block(doc, prompt_url, text, label='网页正文')}"
+            )
             return await self._provider.chat(
                 self._chat_messages(content),
                 max_tokens=_FINAL_MAX_TOKENS,
@@ -86,7 +99,7 @@ class WebSummarizer:
         for i, chunk in enumerate(chunks, 1):
             content = (
                 f"{MAP_INSTRUCTION.format(index=i, total=len(chunks))}\n\n"
-                f"{body}{wrap_untrusted_content(chunk)}"
+                f"{self._untrusted_page_block(doc, prompt_url, chunk, label='网页正文')}"
             )
             partial = await self._provider.chat(
                 self._chat_messages(content),
@@ -97,9 +110,13 @@ class WebSummarizer:
             )
 
         reduce_content = (
-            f"{REDUCE_INSTRUCTION}\n\n网页标题：{doc.title or '（无标题）'}\n"
-            f"网页 URL：{prompt_url}\n\n"
-            f"分段摘要汇总：\n{wrap_untrusted_content(chr(10).join(partials))}"
+            f"{REDUCE_INSTRUCTION}\n\n"
+            + self._untrusted_page_block(
+                doc,
+                prompt_url,
+                chr(10).join(partials),
+                label="分段摘要汇总",
+            )
         )
         final = await self._provider.chat(
             self._chat_messages(reduce_content),
