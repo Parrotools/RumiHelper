@@ -48,6 +48,8 @@ def extract(html: str, url: str) -> WebDocument:
         bs_title, bs_text = _bs4_extract(html)
         title = title or bs_title
         text = bs_text if len(bs_text.strip()) >= len(text.strip()) else text
+    elif not title:
+        title = _bs4_title(html)
 
     text = text.strip()
     if len(text) < MIN_TEXT_LEN:
@@ -56,14 +58,23 @@ def extract(html: str, url: str) -> WebDocument:
     return WebDocument(url=url, title=title.strip(), text=text)
 
 
-def _bs4_extract(html: str) -> tuple[str, str]:
-    """过滤 script/style/nav/footer/header/广告/隐藏元素后取正文文本。"""
+def _make_soup(html: str):
     from bs4 import BeautifulSoup
 
     try:
-        soup = BeautifulSoup(html, "lxml")
+        return BeautifulSoup(html, "lxml")
     except Exception:  # noqa: BLE001 —— lxml 解析失败时退回标准库解析器
-        soup = BeautifulSoup(html, "html.parser")
+        return BeautifulSoup(html, "html.parser")
+
+
+def _bs4_title(html: str) -> str:
+    soup = _make_soup(html)
+    return soup.title.get_text(strip=True) if soup.title else ""
+
+
+def _bs4_extract(html: str) -> tuple[str, str]:
+    """过滤 script/style/nav/footer/header/广告/隐藏元素后取正文文本。"""
+    soup = _make_soup(html)
 
     for tag in soup(_KILL_TAGS):
         tag.decompose()
