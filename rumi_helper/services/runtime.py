@@ -256,6 +256,7 @@ async def _init_runtime_unlocked() -> Runtime:
                 started_at,
                 check_qq=True,
                 dispatcher=dispatcher,
+                housekeeping_task=housekeeping_task,
             ),
             report=report,
             sessions=SessionManager(

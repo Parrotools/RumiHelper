@@ -309,3 +309,56 @@ def test_public_status_reports_abnormal_when_outbound_worker_is_stopped():
     rendered = format_status(status, detailed=False)
 
     assert "服务：异常" in rendered
+
+
+async def test_health_fails_when_confirmation_housekeeping_is_stopped(db):
+    housekeeping = SimpleNamespace(done=lambda: True)
+    health = HealthService(
+        db,
+        HealthyDependency(),
+        HealthyDependency(),
+        SimpleNamespace(is_running=True, job_count=1),
+        started_at=0,
+        housekeeping_task=housekeeping,
+        cache_ttl_seconds=0,
+    )
+
+    readiness = await health.check_readiness()
+    full = await health.check()
+
+    assert readiness["confirmation_housekeeping"] == {"running": False}
+    assert readiness["ok"] is False
+    assert full["confirmation_housekeeping"] == {"running": False}
+    assert full["ok"] is False
+
+
+def test_public_status_reports_abnormal_when_confirmation_housekeeping_stops():
+    status = {
+        "uptime_seconds": 42,
+        "database": {"ok": True},
+        "llm": {"ok": True},
+        "scheduler": {"running": True, "jobs": 1},
+        "outbound_worker": {"running": True},
+        "confirmation_housekeeping": {"running": False},
+    }
+
+    rendered = format_status(status, detailed=False)
+
+    assert "服务：异常" in rendered
+
+
+def test_admin_status_reports_stopped_confirmation_housekeeping():
+    status = {
+        "uptime_seconds": 42,
+        "database": {"ok": True},
+        "llm": {"ok": True},
+        "scheduler": {"running": True, "jobs": 1},
+        "outbound_worker": {"running": True},
+        "confirmation_housekeeping": {"running": False},
+        "counts": {},
+        "recent_errors": [],
+    }
+
+    rendered = format_status(status, detailed=True)
+
+    assert "确认清理：未运行" in rendered
