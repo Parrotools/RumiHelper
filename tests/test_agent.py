@@ -518,6 +518,63 @@ async def test_admin_schedule_topic_and_broadcast_are_guarded(db):
 
 
 @pytest.mark.asyncio
+async def test_confirm_rejects_persisted_broadcast_target_overflow(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"none","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+    targets = ",".join(f"user:{100000 + index}" for index in range(21))
+    action_id = await db.create_pending_agent_action(
+        "admin",
+        "private:admin",
+        "broadcast_message",
+        json.dumps(
+            {"targets": targets, "message": "oversized recipient set"},
+            ensure_ascii=False,
+        ),
+        "tampered broadcast",
+        "9999-01-01T00:00:00+00:00",
+    )
+
+    result = await harness.confirm(runtime=runtime, event=_event("admin"))
+
+    assert result == "执行失败：目标数量 21 超过上限 20"
+    assert runtime.dispatcher.calls == []
+    row = await db.fetchone(
+        "SELECT status, arguments, summary FROM pending_agent_actions WHERE id = ?",
+        (action_id,),
+    )
+    assert row == {"status": "failed", "arguments": "{}", "summary": ""}
+
+
+@pytest.mark.asyncio
+async def test_confirm_rejects_persisted_digest_target_overflow(db):
+    runtime = _runtime(
+        db,
+        FakeLLM('{"action":"none","arguments":{}}'),
+        FakeGitHub(),
+    )
+    harness = AgentHarness()
+    targets = ",".join(f"user:{200000 + index}" for index in range(21))
+    await db.create_pending_agent_action(
+        "admin",
+        "private:admin",
+        "github_digest_set",
+        json.dumps({"targets": targets}, ensure_ascii=False),
+        "tampered digest",
+        "9999-01-01T00:00:00+00:00",
+    )
+
+    result = await harness.confirm(runtime=runtime, event=_event("admin"))
+
+    assert result == "执行失败：目标数量 21 超过上限 20"
+    assert await db.fetch_github_digest_targets() == []
+    assert runtime.scheduler.calls == []
+
+
+@pytest.mark.asyncio
 async def test_pending_agent_action_replacement_is_serialized(db):
     async def create(tool_name: str) -> int:
         return await db.create_pending_agent_action(

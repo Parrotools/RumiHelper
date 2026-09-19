@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from rumi_helper.services.github.tracker import format_check_result, parse_repo_url
 from rumi_helper.services.health import format_status
-from rumi_helper.services.qq.broadcast_parser import parse_targets
+from rumi_helper.services.qq.broadcast_parser import BroadcastFormatError, parse_targets
 from rumi_helper.services.report import ReportError
 from rumi_helper.services.scheduler import SchedulerValidationError, parse_reminder_command
 from rumi_helper.utils import truncate_for_qq
@@ -58,9 +58,19 @@ async def github_watch(runtime: Any, user_id: str, arguments: dict[str, Any], se
     return "GitHub 通知目标已添加。"
 
 
+def _bounded_targets(runtime: Any, raw: str):
+    targets = parse_targets(raw)
+    limit = int(runtime.settings.max_broadcast_recipients)
+    if len(targets) > limit:
+        raise BroadcastFormatError(
+            f"目标数量 {len(targets)} 超过上限 {limit}"
+        )
+    return targets
+
+
 async def github_digest_set(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
     del user_id, session_key
-    targets = parse_targets(arguments["targets"])
+    targets = _bounded_targets(runtime, arguments["targets"])
     await runtime.db.replace_github_digest_targets([target.to_dict() for target in targets])
     await runtime.scheduler.sync_system_task("github_digest", runtime.settings.github_digest_cron)
     return f"GitHub 定时汇总目标已更新：{arguments['targets']}。"
@@ -177,7 +187,7 @@ async def schedule_topic_joke(
 
 async def broadcast_message(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
     del user_id, session_key
-    targets = parse_targets(arguments["targets"])
+    targets = _bounded_targets(runtime, arguments["targets"])
     report = await runtime.dispatcher.broadcast(targets, arguments["message"])
     return report.summary_text()
 
