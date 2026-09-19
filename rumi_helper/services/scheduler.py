@@ -26,6 +26,7 @@ NOTIFICATION_BY_TASK = {
 }
 GROUP_MESSAGE_TASK_TYPE = "group_message"
 TOPIC_JOKE_TASK_TYPE = "topic_joke"
+_ADMIN_TASK_TYPES = frozenset({GROUP_MESSAGE_TASK_TYPE, TOPIC_JOKE_TASK_TYPE})
 
 # Compatibility re-exports. Callers historically import these from
 # rumi_helper.services.scheduler.
@@ -46,6 +47,7 @@ class SchedulerService:
         shutdown_timeout_seconds: float = 10.0,
         outbound_max_attempts: int = 3,
         max_active_reminders_per_user: int = 50,
+        is_admin: Callable[[str], bool] | None = None,
     ):
         try:
             self._timezone = ZoneInfo(timezone_name)
@@ -64,6 +66,7 @@ class SchedulerService:
             1,
             int(max_active_reminders_per_user),
         )
+        self._is_admin = is_admin
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
             "reminder": self._handle_reminder,
@@ -124,6 +127,8 @@ class SchedulerService:
         if self._started:
             return
         for task in await self._db.fetch_enabled_scheduled_tasks():
+            if not await self._ensure_task_authorized(task):
+                continue
             # Do not rewrite persisted cron next_run during startup. It is the
             # cross-process CAS marker for the current occurrence; advancing it
             # here could make a newly started process steal an occurrence that
@@ -247,6 +252,8 @@ class SchedulerService:
     ) -> int:
         if task_type not in self._handlers:
             raise SchedulerValidationError(f"未注册的任务类型：{task_type}")
+        if task_type in _ADMIN_TASK_TYPES:
+            self._require_admin(str(owner_id))
         if (run_at is None) == (cron_expression is None):
             raise SchedulerValidationError("必须且只能指定一次性时间或 cron 表达式")
         if not isinstance(payload, dict):
@@ -296,6 +303,8 @@ class SchedulerService:
             task = await self._db.fetch_scheduled_task(task_id)
             if task is None or not task["enabled"] or not task["next_run"]:
                 return
+            if not await self._ensure_task_authorized(task):
+                return
 
             scheduled_for = self._parse_datetime(task["next_run"])
             now = datetime.now(self._timezone)
@@ -340,6 +349,32 @@ class SchedulerService:
         finally:
             if current is not None:
                 self._active_runs.discard(current)
+
+    def _require_admin(self, owner_id: str) -> None:
+        if self._is_admin is not None and not self._is_admin(str(owner_id)):
+            raise SchedulerValidationError("该定时任务仅管理员可创建")
+
+    async def _ensure_task_authorized(self, task: dict) -> bool:
+        if (
+            task["task_type"] not in _ADMIN_TASK_TYPES
+            or self._is_admin is None
+            or self._is_admin(str(task["owner_id"]))
+        ):
+            return True
+        await self._db.update_scheduled_task_schedule(
+            int(task["id"]),
+            None,
+            None,
+            False,
+        )
+        self._remove_job(int(task["id"]))
+        logger.warning(
+            "已禁用失去管理员权限的定时任务 task_id=%s type=%s owner=%s",
+            task["id"],
+            task["task_type"],
+            task["owner_id"],
+        )
+        return False
 
     async def _handle_reminder(self, task: dict) -> None:
         payload = task["payload"]

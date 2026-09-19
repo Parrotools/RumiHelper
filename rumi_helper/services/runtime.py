@@ -128,6 +128,7 @@ async def _init_runtime_unlocked() -> Runtime:
         stack.push_async_callback(dispatcher.stop)
 
         notifications = NotificationSettingsService(db)
+        permission = PermissionService(settings.admin_ids)
         github_client = GitHubClient(token=settings.github_token)
         stack.push_async_callback(github_client.aclose)
 
@@ -154,6 +155,7 @@ async def _init_runtime_unlocked() -> Runtime:
             llm=llm,
             outbound_max_attempts=settings.outbound_max_attempts,
             max_active_reminders_per_user=settings.max_active_reminders_per_user,
+            is_admin=permission.is_admin,
         )
         stack.push_async_callback(scheduler.stop)
         scheduler.register_handler("github_check", github.run_scheduled_check)
@@ -213,7 +215,7 @@ async def _init_runtime_unlocked() -> Runtime:
             ),
             llm=llm,
             dispatcher=dispatcher,
-            permission=PermissionService(settings.admin_ids),
+            permission=permission,
             fetcher=fetcher,
             playwright_fetcher=playwright_fetcher,
             summarizer=summarizer,

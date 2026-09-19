@@ -854,3 +854,106 @@ async def test_concurrent_processes_cannot_exceed_active_reminder_limit(tmp_path
     finally:
         await first_db.close()
         await second_db.close()
+
+
+async def test_admin_task_creation_requires_current_admin(db):
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        is_admin=lambda user_id: user_id == "admin-1",
+    )
+    run_at = datetime.now(UTC) + timedelta(hours=1)
+
+    with pytest.raises(SchedulerValidationError, match="仅管理员"):
+        await scheduler.create_group_message(
+            "user-1",
+            "30000",
+            "hello",
+            run_at=run_at,
+        )
+
+    with pytest.raises(SchedulerValidationError, match="仅管理员"):
+        await scheduler.create_task(
+            "user-1",
+            "group_message",
+            {"target_type": "group", "target_id": "30000", "message": "hello"},
+            run_at=run_at,
+        )
+
+    task_id = await scheduler.create_group_message(
+        "admin-1",
+        "30000",
+        "hello",
+        run_at=run_at,
+    )
+    assert isinstance(task_id, int)
+
+
+async def test_revoked_admin_task_is_disabled_before_execution(db):
+    admins = {"admin-1"}
+    dispatcher = FakeDispatcher()
+    scheduler = SchedulerService(
+        db,
+        dispatcher,
+        timezone_name="UTC",
+        is_admin=lambda user_id: user_id in admins,
+    )
+    task_id = await scheduler.create_group_message(
+        "admin-1",
+        "30000",
+        "hello",
+        run_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    admins.clear()
+    await scheduler.run_task(task_id, force=True)
+
+    assert dispatcher.enqueued == []
+    task = await db.fetch_scheduled_task(task_id)
+    assert task["enabled"] == 0
+    assert task["cron_expression"] is None
+    assert task["next_run"] is None
+
+
+async def test_start_disables_persisted_admin_task_after_permission_revocation(db):
+    task_id = await db.create_scheduled_task(
+        "former-admin",
+        "group_message",
+        {"target_type": "group", "target_id": "30000", "message": "hello"},
+        "0 * * * *",
+        (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        is_admin=lambda _user_id: False,
+    )
+
+    await scheduler.start()
+    try:
+        task = await db.fetch_scheduled_task(task_id)
+        assert task["enabled"] == 0
+        assert task["cron_expression"] is None
+        assert task["next_run"] is None
+        assert scheduler._scheduler.get_job(scheduler._job_id(task_id)) is None
+    finally:
+        await scheduler.stop()
+
+
+async def test_personal_reminder_is_not_admin_gated(db):
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        is_admin=lambda _user_id: False,
+    )
+
+    task_id = await scheduler.create_reminder(
+        "user-1",
+        "personal",
+        run_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    assert isinstance(task_id, int)
