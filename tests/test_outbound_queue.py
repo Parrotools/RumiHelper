@@ -430,3 +430,60 @@ async def test_dispatcher_start_prunes_existing_delivery_history(db):
         "SELECT COUNT(*) AS count FROM send_logs",
         (),
     ) == {"count": 1}
+
+
+async def test_concurrent_dispatchers_claim_one_outbound_message_once(tmp_path):
+    barrier_count = 0
+    barrier_ready = asyncio.Event()
+
+    class BarrierDatabase(Database):
+        async def claim_outbound_message(self, now: str, lease_before: str):
+            nonlocal barrier_count
+            barrier_count += 1
+            if barrier_count >= 2:
+                barrier_ready.set()
+            await barrier_ready.wait()
+            return await super().claim_outbound_message(now, lease_before)
+
+    path = str(tmp_path / "outbound-race.db")
+    first_db = BarrierDatabase(path)
+    second_db = BarrierDatabase(path)
+    await first_db.connect()
+    await second_db.connect()
+    calls: list[str] = []
+
+    async def first_api(action: str, **params) -> dict:
+        calls.append("first")
+        return {"message_id": 101}
+
+    async def second_api(action: str, **params) -> dict:
+        calls.append("second")
+        return {"message_id": 202}
+
+    try:
+        message_id = await first_db.enqueue_outbound_message(
+            "user",
+            "123",
+            "exactly one claimant",
+            3,
+        )
+        first = MessageDispatcher(first_db, api_caller=first_api)
+        second = MessageDispatcher(second_db, api_caller=second_api)
+
+        processed = await asyncio.gather(
+            first.process_outbound_messages(limit=1),
+            second.process_outbound_messages(limit=1),
+        )
+
+        assert sum(processed) == 1
+        assert len(calls) == 1
+        row = await first_db.fetchone(
+            "SELECT status, attempts, message_id FROM outbound_messages WHERE id = ?",
+            (message_id,),
+        )
+        assert row["status"] == "sent"
+        assert row["attempts"] == 1
+        assert row["message_id"] in {"101", "202"}
+    finally:
+        await first_db.close()
+        await second_db.close()
