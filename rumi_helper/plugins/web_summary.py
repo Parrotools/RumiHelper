@@ -32,7 +32,11 @@ from rumi_helper.services.web.fetcher import (
     TooManyRedirectsError,
     UnsupportedContentTypeError,
 )
-from rumi_helper.services.web.url_parser import extract_urls, safe_url_for_log
+from rumi_helper.services.web.url_parser import (
+    extract_urls,
+    redact_url_secrets_in_text,
+    safe_url_for_log,
+)
 from rumi_helper.utils import send_local_reply, send_reply, truncate_for_qq
 
 SUMMARY_COMMANDS = ("/总结", "/summary")
@@ -120,8 +124,13 @@ async def _handle(event: MessageEvent, matcher_: Matcher):
         await send_local_reply(matcher_, runtime, "用法：/总结 <网页URL>（可一次给多个，最多同时处理 3 个）")
         return
 
-    # 网页总结不进入 AI 回复流程，但保留用户发过的 URL，供下一句“这个仓库”做确定性指代解析。
-    await runtime.sessions.append(_session_key(event, runtime), "user", text)
+    # 网页总结不进入 AI 回复流程，但保留去敏后的 URL，供下一句“这个仓库”
+    # 做确定性指代解析；绝不把 URL userinfo/query/fragment 持久化进 session。
+    await runtime.sessions.append(
+        _session_key(event, runtime),
+        "user",
+        redact_url_secrets_in_text(text),
+    )
 
     for url in urls[:MAX_URLS_PER_MESSAGE]:
         await _summarize_one(matcher_, runtime, url, notice=is_command)

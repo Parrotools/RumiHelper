@@ -3,7 +3,10 @@
 import re
 from urllib.parse import urlsplit
 
-URL_PATTERN = re.compile(r"https?://[^\s<>\"'）】\]]+", re.IGNORECASE)
+URL_PATTERN = re.compile(
+    r"https?://[^\s<>\"'）】\]，。！？；：、》〉]+",
+    re.IGNORECASE,
+)
 
 # 中文/英文常见会吸附在 URL 后面的标点
 _TRAILING_PUNCT = ".,;:!?。，、；：！？》〉\"'`"
@@ -45,6 +48,45 @@ def _dedupe_key(url: str) -> str:
         # Malformed URLs are rejected later by the SSRF validator; dedupe should
         # not turn parsing into a separate failure path.
         return url
+
+
+def safe_url_for_history(url: str) -> str:
+    """Preserve routing-relevant path while removing credentials, query, and fragment."""
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        if parsed.scheme.lower() not in {"http", "https"} or not host:
+            return "<invalid-url>"
+        host_for_netloc = f"[{host}]" if ":" in host else host
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        path = parsed.path or "/"
+        return f"{parsed.scheme.lower()}://{host_for_netloc}{port}{path}"
+    except ValueError:
+        return "<invalid-url>"
+
+
+def redact_url_secrets_in_text(text: str) -> str:
+    """Redact sensitive URL components while preserving non-URL text verbatim."""
+    value = str(text or "")
+    matches = list(URL_PATTERN.finditer(value))
+    if not matches:
+        return value
+
+    parts: list[str] = []
+    cursor = 0
+    for match in matches:
+        parts.append(value[cursor:match.start()])
+        raw = match.group(0)
+        stripped = raw.rstrip(_TRAILING_PUNCT)
+        suffix = raw[len(stripped):]
+        while stripped.endswith(")") and "(" not in stripped:
+            stripped = stripped[:-1]
+            suffix = ")" + suffix
+        parts.append(safe_url_for_history(stripped))
+        parts.append(suffix)
+        cursor = match.end()
+    parts.append(value[cursor:])
+    return "".join(parts)
 
 
 def safe_url_for_log(url: str) -> str:

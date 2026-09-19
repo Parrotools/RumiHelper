@@ -1,4 +1,10 @@
-from rumi_helper.services.web.url_parser import extract_urls, has_url, safe_url_for_log
+from rumi_helper.services.web.url_parser import (
+    extract_urls,
+    has_url,
+    redact_url_secrets_in_text,
+    safe_url_for_history,
+    safe_url_for_log,
+)
 
 
 def test_single_url():
@@ -52,6 +58,15 @@ def test_path_and_query_case_are_not_deduplicated():
         "https://example.com/x?Key=V",
         "https://example.com/x?key=V",
     ]
+
+
+def test_safe_url_for_history_preserves_path_but_redacts_secrets():
+    assert safe_url_for_history(
+        "https://user:password@github.com/OpenAI/openai-python?token=secret#frag"
+    ) == "https://github.com/OpenAI/openai-python"
+    assert redact_url_secrets_in_text(
+        "看看 https://user:password@example.com/private?a=secret#frag，然后继续。"
+    ) == "看看 https://example.com/private，然后继续。"
 
 
 def test_safe_url_for_log_redacts_credentials_path_query_and_fragment():
