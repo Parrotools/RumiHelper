@@ -33,6 +33,8 @@ from rumi_helper.services.web.fetcher import PlaywrightFetcher, WebFetcher
 from rumi_helper.services.web.summarizer import WebSummarizer
 from rumi_helper.utils import ReplyGate
 
+_CONFIRMATION_HOUSEKEEPING_INTERVAL_SECONDS = 30.0
+
 
 @dataclass
 class Runtime:
@@ -56,11 +58,54 @@ class Runtime:
     summarizer: WebSummarizer
     web_semaphore: asyncio.Semaphore
     agent: AgentHarness
+    housekeeping_task: asyncio.Task | None = None
     reply_gate: ReplyGate = field(default_factory=ReplyGate)
 
 
 _runtime: Runtime | None = None
 _runtime_lock = asyncio.Lock()
+
+
+async def _recover_expired_confirmations(db: Database) -> tuple[int, int]:
+    now = datetime.now(UTC)
+    recovered_agent_actions = await db.recover_executing_agent_actions(
+        now.isoformat()
+    )
+    recovered_broadcasts = await db.recover_executing_broadcasts(
+        now.strftime("%Y-%m-%d %H:%M:%S")
+    )
+    if recovered_agent_actions or recovered_broadcasts:
+        logging.getLogger(__name__).warning(
+            "恢复过期执行状态 agent_actions=%s broadcasts=%s；已标记为 failed，未自动重试",
+            recovered_agent_actions,
+            recovered_broadcasts,
+        )
+    return recovered_agent_actions, recovered_broadcasts
+
+
+async def _confirmation_housekeeping_loop(
+    db: Database,
+    interval_seconds: float = _CONFIRMATION_HOUSEKEEPING_INTERVAL_SECONDS,
+) -> None:
+    interval = max(0.01, float(interval_seconds))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _recover_expired_confirmations(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("清理过期确认执行状态失败")
+
+
+async def _cancel_background_task(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 async def init_runtime() -> Runtime:
@@ -88,19 +133,7 @@ async def _init_runtime_unlocked() -> Runtime:
         await db.connect()
         stack.push_async_callback(db.close)
 
-        recovery_now = datetime.now(UTC)
-        recovered_agent_actions = await db.recover_executing_agent_actions(
-            recovery_now.isoformat()
-        )
-        recovered_broadcasts = await db.recover_executing_broadcasts(
-            recovery_now.strftime("%Y-%m-%d %H:%M:%S")
-        )
-        if recovered_agent_actions or recovered_broadcasts:
-            logging.getLogger(__name__).warning(
-                "启动恢复遗留执行状态 agent_actions=%s broadcasts=%s；已标记为 failed，未自动重试",
-                recovered_agent_actions,
-                recovered_broadcasts,
-            )
+        await _recover_expired_confirmations(db)
 
         personality = PersonalityManager(settings.personality_file)
 
@@ -197,6 +230,12 @@ async def _init_runtime_unlocked() -> Runtime:
         )
 
         started_at = time.monotonic()
+        housekeeping_task = asyncio.create_task(
+            _confirmation_housekeeping_loop(db),
+            name="confirmation-housekeeping",
+        )
+        stack.push_async_callback(_cancel_background_task, housekeeping_task)
+
         runtime = Runtime(
             settings=settings,
             db=db,
@@ -222,6 +261,7 @@ async def _init_runtime_unlocked() -> Runtime:
             summarizer=summarizer,
             web_semaphore=asyncio.Semaphore(max(1, settings.max_concurrent_web_tasks)),
             agent=AgentHarness(confirmation_ttl_seconds=settings.agent_confirm_ttl_seconds),
+            housekeeping_task=housekeeping_task,
         )
 
         await dispatcher.start()
@@ -251,6 +291,10 @@ async def _close_runtime_unlocked() -> None:
         return
     rt, _runtime = _runtime, None
     logger = logging.getLogger(__name__)
+    try:
+        await _cancel_background_task(rt.housekeeping_task)
+    except Exception:
+        logger.exception("关闭确认状态清理任务失败")
     try:
         await rt.scheduler.stop()
     except Exception:

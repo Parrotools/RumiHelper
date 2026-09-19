@@ -83,7 +83,10 @@ async def test_init_runtime_failure_unwinds_resources_and_does_not_publish(
 
     await asyncio.sleep(0)
     assert all(
-        task.get_name() != "outbound-message-worker"
+        task.get_name() not in {
+            "outbound-message-worker",
+            "confirmation-housekeeping",
+        }
         for task in asyncio.all_tasks()
         if task is not asyncio.current_task()
     )
@@ -148,9 +151,13 @@ async def test_concurrent_init_runtime_builds_one_instance(tmp_path, monkeypatch
     assert first_runtime is second_runtime
     assert runtime_module._runtime is first_runtime
     assert len(TrackingDatabase.instances) == 1
+    housekeeping_task = first_runtime.housekeeping_task
+    assert housekeeping_task is not None
+    assert housekeeping_task.done() is False
 
     await runtime_module.close_runtime()
     assert runtime_module._runtime is None
+    assert housekeeping_task.done() is True
     assert TrackingDatabase.instances[0].closed is True
     assert fake_llm.closed is True
     assert fake_github_client.closed is True
@@ -265,3 +272,76 @@ async def test_init_runtime_marks_stale_executing_actions_failed(tmp_path, monke
         ) == {"status": "executing"}
     finally:
         await runtime_module.close_runtime()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_housekeeping_expires_orphaned_executions(tmp_path):
+    db = Database(str(tmp_path / "housekeeping.db"))
+    await db.connect()
+    action_id = await db.create_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "memory_save",
+        '{"content":"secret"}',
+        "secret summary",
+        "9999-01-01T00:00:00+00:00",
+    )
+    assert await db.claim_pending_agent_action(
+        "user-1",
+        "private:user-1",
+        "2000-01-01T00:00:00+00:00",
+    )
+    broadcast_id = await db.create_pending_broadcast(
+        "admin-1",
+        [{"type": "user", "id": "123"}],
+        "secret broadcast",
+        ttl_seconds=300,
+    )
+    assert await db.claim_pending(broadcast_id)
+
+    housekeeping = asyncio.create_task(
+        runtime_module._confirmation_housekeeping_loop(
+            db,
+            interval_seconds=0.01,
+        )
+    )
+    try:
+        await db.execute(
+            "UPDATE pending_agent_actions SET expires_at = ? WHERE id = ?",
+            ("2001-01-01T00:00:00+00:00", action_id),
+        )
+        await db.execute(
+            "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+            ("2001-01-01 00:00:00", broadcast_id),
+        )
+
+        for _ in range(50):
+            action = await db.fetchone(
+                "SELECT status, arguments, summary "
+                "FROM pending_agent_actions WHERE id = ?",
+                (action_id,),
+            )
+            broadcast = await db.fetchone(
+                "SELECT status, targets_json, content "
+                "FROM pending_broadcasts WHERE id = ?",
+                (broadcast_id,),
+            )
+            if action["status"] == "failed" and broadcast["status"] == "failed":
+                break
+            await asyncio.sleep(0.01)
+
+        assert action == {
+            "status": "failed",
+            "arguments": "{}",
+            "summary": "",
+        }
+        assert broadcast == {
+            "status": "failed",
+            "targets_json": "[]",
+            "content": "",
+        }
+    finally:
+        housekeeping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await housekeeping
+        await db.close()
