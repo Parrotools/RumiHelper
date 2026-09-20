@@ -85,9 +85,9 @@ NapCat 是客户端，Bot 是服务端。两者同机时使用 `ws://127.0.0.1:8
 
 ## 健康检查、备份与升级
 
-- `GET /livez`：只表示 Bot 进程与 HTTP 事件循环仍存活，不探测任何外部依赖；适合作为 liveness probe。
-- `GET /readyz`：检查 SQLite、LLM 与 Scheduler；QQ 或 GitHub 短暂异常不会把实例判为未就绪，适合作为 readiness probe。
-- `GET /healthz`：完整业务健康检查，额外包含 GitHub 与 QQ/OneBot 状态，但不返回业务计数或原始错误字符串；用于运维观测，不要把 QQ 短暂掉线直接绑定为进程重启条件。不要将这些端点暴露到公网。
+- `GET /livez`：只表示 Bot 进程与 HTTP 事件循环仍存活，不探测任何外部依赖；适合作为 liveness probe，固定返回最小 `{"ok": true}`。
+- `GET /readyz`：检查 SQLite、LLM 与 Scheduler；QQ 或 GitHub 短暂异常不会把实例判为未就绪。配置 `ONEBOT_V11_ACCESS_TOKEN` 时必须携带 `Authorization: Bearer <token>`；响应只返回最小 `{"ok": true|false}`。
+- `GET /healthz`：完整业务健康检查，额外探测 GitHub 与 QQ/OneBot。配置 token 时同样要求 Bearer 鉴权，HTTP 响应不返回依赖明细、业务计数或原始错误；详细 diagnostics 只通过管理员私聊 `/status` 查看。
 - QQ 内发送 `/status`：普通用户只看到基础可用性和运行时间；Bot 管理员额外看到依赖状态、任务数、监控数、记忆数和最近投递错误。
 - 升级前先停止 Bot，并备份整个 `data/` 目录。SQLite 使用 WAL 时应同时备份 `bot.db`、`bot.db-wal`、`bot.db-shm`，或先正常停机后仅备份 `bot.db`。
 - 新版本启动时自动执行有序 migration；每个 migration 与对应 `schema_migrations` 版本标记在同一 SQLite 事务内，失败会整体回滚并关闭连接。已有数据不会被删除；若启动失败，保留备份并查看 migration 相关日志，不要手改 `schema_migrations`。

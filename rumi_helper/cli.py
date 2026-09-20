@@ -5,19 +5,40 @@ NapCatQQ connects through OneBot 11 reverse WebSocket at:
 """
 
 import os
+import secrets
 
 import nonebot
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
 from rumi_helper.config import Settings
 
+_ONEBOT_ACCESS_TOKEN = Settings().onebot_token
+
 
 def _bridge_onebot_access_token() -> None:
     """Expose the project's legacy token name under the adapter's canonical key."""
-    token = Settings().onebot_token
-    if token:
-        os.environ["ONEBOT_V11_ACCESS_TOKEN"] = token
+    if _ONEBOT_ACCESS_TOKEN:
+        os.environ["ONEBOT_V11_ACCESS_TOKEN"] = _ONEBOT_ACCESS_TOKEN
+
+
+def _probe_authorized(request: Request) -> bool:
+    if not _ONEBOT_ACCESS_TOKEN:
+        return True
+    supplied = request.headers.get("authorization", "")
+    return secrets.compare_digest(
+        supplied,
+        f"Bearer {_ONEBOT_ACCESS_TOKEN}",
+    )
+
+
+def _probe_unauthorized() -> JSONResponse:
+    return JSONResponse(
+        {"ok": False},
+        status_code=401,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 _bridge_onebot_access_token()
@@ -72,27 +93,35 @@ async def livez():
 
 
 @driver.server_app.get("/readyz")
-async def readyz():
-    """核心就绪检查；QQ/GitHub 短暂异常不会让实例失去就绪状态。"""
+async def readyz(request: Request):
+    """核心就绪检查；配置 OneBot token 时要求 Bearer 鉴权。"""
+    if not _probe_authorized(request):
+        return _probe_unauthorized()
+
     from rumi_helper.services.runtime import get_runtime
 
     try:
         result = await get_runtime().health.check_readiness()
     except RuntimeError:
-        return JSONResponse({"ok": False, "detail": "starting"}, status_code=503)
-    return JSONResponse(result, status_code=200 if result["ok"] else 503)
+        return JSONResponse({"ok": False}, status_code=503)
+    ok = bool(result["ok"])
+    return JSONResponse({"ok": ok}, status_code=200 if ok else 503)
 
 
 @driver.server_app.get("/healthz")
-async def healthz():
-    """完整业务健康检查，包括 QQ 与 GitHub 等外部依赖。"""
+async def healthz(request: Request):
+    """完整业务健康检查；配置 OneBot token 时要求 Bearer 鉴权。"""
+    if not _probe_authorized(request):
+        return _probe_unauthorized()
+
     from rumi_helper.services.runtime import get_runtime
 
     try:
         result = await get_runtime().health.check(include_diagnostics=False)
     except RuntimeError:
-        return JSONResponse({"ok": False, "detail": "starting"}, status_code=503)
-    return JSONResponse(result, status_code=200 if result["ok"] else 503)
+        return JSONResponse({"ok": False}, status_code=503)
+    ok = bool(result["ok"])
+    return JSONResponse({"ok": ok}, status_code=200 if ok else 503)
 
 
 def main() -> None:
