@@ -318,14 +318,15 @@ user:789012
 | `DATABASE_PATH` | data/bot.db | SQLite 路径 |
 | `LOG_LEVEL` | INFO | 日志级别 |
 
-所有配置改完都要重启 `python bot.py`。
+所有配置改完都要重启 Bot。安装后的标准入口是 `rumi-helper`；源码开发环境仍可使用兼容 wrapper `python bot.py`。
 
 ## 7. 日常运维
 
 **启动 / 停止**：
 
 ```bash
-python bot.py            # 前台启动，Ctrl+C 停止（会自动释放连接）
+rumi-helper              # 推荐：安装后的标准入口，Ctrl+C 停止
+# python bot.py          # 源码开发时的兼容 wrapper
 ```
 
 Windows 常驻：用 NSSM 注册服务；Linux 常驻：systemd（见 README 第 12-13 节）。
