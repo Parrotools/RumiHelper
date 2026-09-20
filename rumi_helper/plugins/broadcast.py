@@ -132,7 +132,20 @@ async def _handle_broadcast(event: MessageEvent):
         await send_local_reply(broadcast_matcher, runtime, preview)
         return
 
-    report = await runtime.dispatcher.broadcast(targets, message)
+    try:
+        report = await runtime.dispatcher.broadcast(targets, message)
+    except Exception as exc:  # noqa: BLE001 - direct mode must not leak internal failures
+        logger.error(
+            "broadcast direct execution failed admin=%s error=%s",
+            sender_id,
+            type(exc).__name__,
+        )
+        await send_local_reply(
+            broadcast_matcher,
+            runtime,
+            "群发执行失败，请稍后重试。",
+        )
+        return
     await send_local_reply(broadcast_matcher, runtime, report.summary_text())
 
 

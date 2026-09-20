@@ -503,6 +503,41 @@ async def test_github_list_in_group_refuses_private_configuration(monkeypatch):
     ]
 
 
+async def test_broadcast_direct_mode_contains_internal_failure(monkeypatch):
+    sent: list[str] = []
+
+    class BrokenDispatcher:
+        async def broadcast(self, _targets, _message):
+            raise RuntimeError("super-secret-internal-detail")
+
+    runtime = SimpleNamespace(
+        permission=SimpleNamespace(is_admin=lambda _user_id: True),
+        settings=SimpleNamespace(
+            max_broadcast_recipients=10,
+            broadcast_confirm_ttl_seconds=300,
+            broadcast_require_confirm=False,
+        ),
+        dispatcher=BrokenDispatcher(),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(broadcast_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(broadcast_plugin, "send_local_reply", fake_send_local_reply)
+
+    await broadcast_plugin._handle_broadcast(
+        _private_event(
+            "/broadcast user:123 -- hello",
+            user=20000,
+            mid=376,
+        )
+    )
+
+    assert sent == ["群发执行失败，请稍后重试。"]
+    assert "super-secret-internal-detail" not in sent[0]
+
+
 async def test_github_digest_in_group_refuses_private_configuration(monkeypatch):
     sent: list[str] = []
     runtime = SimpleNamespace()
