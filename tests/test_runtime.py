@@ -543,3 +543,67 @@ async def test_confirmation_housekeeping_expires_unvisited_pending_payloads(tmp_
         with pytest.raises(asyncio.CancelledError):
             await housekeeping
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_close_runtime_preserves_shutdown_order_and_isolates_failures(monkeypatch):
+    from types import SimpleNamespace
+
+    order: list[str] = []
+    started = asyncio.Event()
+
+    async def housekeeping():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            order.append("housekeeping")
+
+    class Stopper:
+        def __init__(self, name: str, *, fail: bool = False):
+            self.name = name
+            self.fail = fail
+
+        async def stop(self):
+            order.append(self.name)
+            if self.fail:
+                raise RuntimeError(f"{self.name} failed")
+
+    class Closer:
+        def __init__(self, name: str):
+            self.name = name
+
+        async def aclose(self):
+            order.append(self.name)
+
+    class DatabaseCloser:
+        async def close(self):
+            order.append("db")
+
+    task = asyncio.create_task(housekeeping())
+    await started.wait()
+    runtime = SimpleNamespace(
+        housekeeping_task=task,
+        scheduler=Stopper("scheduler", fail=True),
+        dispatcher=Stopper("dispatcher"),
+        llm=Closer("llm"),
+        github_client=Closer("github"),
+        fetcher=Closer("fetcher"),
+        db=DatabaseCloser(),
+    )
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    monkeypatch.setattr(runtime_module, "_runtime_lock", asyncio.Lock())
+
+    await runtime_module.close_runtime()
+
+    assert runtime_module._runtime is None
+    assert task.done() is True
+    assert order == [
+        "housekeeping",
+        "scheduler",
+        "dispatcher",
+        "llm",
+        "github",
+        "fetcher",
+        "db",
+    ]
