@@ -8,23 +8,29 @@
 
 ## Windows
 
+推荐使用仓库的 `uv.lock` 做可重复部署：
+
 ```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\pip install -e "."
+uv sync --frozen --no-dev
 copy .env.example .env
 .venv\Scripts\rumi-helper.exe
 ```
+
+如果不用 uv，也可以继续使用 `py -3.11 -m venv .venv` + `.venv\Scripts\pip install -e "."`。
 
 建议用任务计划程序或 NSSM 以工作目录设为项目根目录运行上述命令。停止前发送正常终止信号，避免强制杀进程。
 
 ## Linux
 
+推荐使用仓库的 `uv.lock` 做可重复部署：
+
 ```bash
-python3.11 -m venv .venv
-.venv/bin/pip install -e "."
+uv sync --frozen --no-dev
 cp .env.example .env
 .venv/bin/rumi-helper
 ```
+
+如果不用 uv，也可以继续使用 `python3.11 -m venv .venv` + `.venv/bin/pip install -e "."`。
 
 仓库提供 `ops/qqbot.service` 作为生产 systemd 模板。模板默认项目位于 `/opt/RumiHelper`，以专用 `qqbot` 用户运行，并只允许写入 `/opt/RumiHelper/data`。安装示例：
 

@@ -82,13 +82,22 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 ```
 
-也可以用 uv：`uv venv && uv pip install -e ".[dev]"`。
+推荐使用仓库锁文件做可重复安装：`uv sync --frozen --extra dev`。只安装运行依赖可用 `uv sync --frozen --no-dev`。如果不用 uv，仍可使用普通 venv + pip。
 
 ## 2. 安装依赖
 
+推荐按仓库中的 `uv.lock` 固定完整依赖图：
+
 ```bash
-pip install -e .          # 运行依赖
-pip install -e ".[dev]"   # 含 pytest / ruff
+uv sync --frozen --no-dev      # 运行依赖
+uv sync --frozen --extra dev   # 开发/测试依赖
+```
+
+兼容的 pip 安装方式仍然可用，但会按当时可解析到的依赖版本安装，重建结果不如 lockfile 可重复：
+
+```bash
+pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## 3. 配置 .env
