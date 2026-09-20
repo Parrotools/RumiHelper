@@ -66,7 +66,7 @@ jobs:
             LLM_API_KEY='' \
             ADMIN_QQ_IDS='' \
             OWNER_QQ_ID='' \
-            ONEBOT_ACCESS_TOKEN=smoke-token \
+            ONEBOT_V11_ACCESS_TOKEN=smoke-token \
             GITHUB_CHECK_CRON='' \
             GITHUB_DIGEST_CRON='' \
             DAILY_REPORT_CRON='' \
@@ -82,7 +82,7 @@ jobs:
             LLM_API_KEY='' \
             ADMIN_QQ_IDS='' \
             OWNER_QQ_ID='' \
-            ONEBOT_ACCESS_TOKEN=smoke-token \
+            ONEBOT_V11_ACCESS_TOKEN=smoke-token \
             GITHUB_CHECK_CRON='' \
             GITHUB_DIGEST_CRON='' \
             DAILY_REPORT_CRON='' \
@@ -185,7 +185,7 @@ jobs:
           python -m pip install --no-deps --force-reinstall "$root"/dist/*.whl
 
           cd "$tmp"
-          env             DRIVER='~fastapi'             HOST=127.0.0.1             PORT=18081             DATABASE_PATH="$tmp/bot.db"             LLM_BASE_URL=http://127.0.0.1:9/v1             LLM_API_KEY=''             ADMIN_QQ_IDS=''             OWNER_QQ_ID=''             ONEBOT_ACCESS_TOKEN=smoke-token             GITHUB_CHECK_CRON=''             GITHUB_DIGEST_CRON=''             DAILY_REPORT_CRON=''             ENABLE_PLAYWRIGHT=false             rumi-doctor
+          env             DRIVER='~fastapi'             HOST=127.0.0.1             PORT=18081             DATABASE_PATH="$tmp/bot.db"             LLM_BASE_URL=http://127.0.0.1:9/v1             LLM_API_KEY=''             ADMIN_QQ_IDS=''             OWNER_QQ_ID=''             ONEBOT_V11_ACCESS_TOKEN=smoke-token             GITHUB_CHECK_CRON=''             GITHUB_DIGEST_CRON=''             DAILY_REPORT_CRON=''             ENABLE_PLAYWRIGHT=false             rumi-doctor
 
           python - <<'PY'
           import socksio
