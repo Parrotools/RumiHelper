@@ -165,6 +165,24 @@ def _reply_message_id(
         return None
 
 
+def _reply_belongs_to_event(event: MessageEvent, reply: object | None) -> bool:
+    if reply is None:
+        return False
+    if str(_object_field(reply, "message_type", "")) != str(event.message_type):
+        return False
+
+    sender = _object_field(reply, "sender")
+    sender_id = _object_field(sender, "user_id")
+    if isinstance(event, GroupMessageEvent):
+        group_id = _object_field(reply, "group_id")
+        return group_id is not None and str(group_id) == str(event.group_id)
+
+    return sender_id is not None and str(sender_id) in {
+        str(event.user_id),
+        str(event.self_id),
+    }
+
+
 async def _load_reply(
     event: MessageEvent,
     bot_getter,
@@ -172,7 +190,13 @@ async def _load_reply(
     reply = getattr(event, "reply", None)
     quoted_message = _object_field(reply, "message")
     if render_message_for_prompt(quoted_message):
-        return reply, quoted_message
+        if _reply_belongs_to_event(event, reply):
+            return reply, quoted_message
+        logger.warning(
+            "忽略无法证明同会话的引用消息 message_id={}",
+            _reply_message_id(event, reply, _reply_segment_data(event)),
+        )
+        return None, None
 
     segment_data = _reply_segment_data(event)
     message_id = _reply_message_id(event, reply, segment_data)
@@ -187,6 +211,12 @@ async def _load_reply(
             type(exc).__name__,
         )
         return reply, quoted_message
+    if not _reply_belongs_to_event(event, fetched):
+        logger.warning(
+            "忽略无法证明同会话的补取引用 message_id={}",
+            message_id,
+        )
+        return None, None
     return fetched, _object_field(fetched, "message")
 
 
