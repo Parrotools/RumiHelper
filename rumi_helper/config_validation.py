@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class RuntimeConfigurationError(ValueError):
@@ -73,8 +74,30 @@ def numeric_limit_error(settings: Any) -> str | None:
     return None
 
 
+def structural_configuration_error(settings: Any) -> str | None:
+    """Return a secret-free description of a non-numeric runtime invariant failure."""
+    if not str(settings.host).strip():
+        return "HOST 不能为空"
+    if not 1 <= int(settings.port) <= 65535:
+        return "PORT 必须在 1..65535"
+    if not str(settings.llm_model).strip():
+        return "LLM_MODEL 不能为空"
+    try:
+        ZoneInfo(str(settings.scheduler_timezone))
+    except (ZoneInfoNotFoundError, ValueError):
+        return "SCHEDULER_TIMEZONE 不存在"
+    return None
+
+
 def validate_runtime_limits(settings: Any) -> None:
     """Raise before resources are created when numeric runtime invariants are invalid."""
     error = numeric_limit_error(settings)
+    if error is not None:
+        raise RuntimeConfigurationError(error)
+
+
+def validate_runtime_configuration(settings: Any) -> None:
+    """Validate all non-secret runtime invariants before creating resources."""
+    error = structural_configuration_error(settings) or numeric_limit_error(settings)
     if error is not None:
         raise RuntimeConfigurationError(error)

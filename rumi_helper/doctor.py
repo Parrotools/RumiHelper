@@ -40,6 +40,7 @@ def run_checks(settings: Settings) -> list[DoctorCheck]:
     checks.append(_check_bind(settings))
     checks.append(_check_bind_availability(settings))
     checks.append(_check_llm_url(settings))
+    checks.append(_check_llm_model(settings))
     checks.extend(_check_credentials(settings))
     checks.extend(_check_transport_security(settings))
     checks.extend(_check_web_fetch_security(settings))
@@ -109,6 +110,12 @@ def _check_llm_url(settings: Settings) -> DoctorCheck:
     if url.query or url.fragment:
         return DoctorCheck("llm_url", "FAIL", "LLM_BASE_URL 不允许包含 query 或 fragment")
     return DoctorCheck("llm_url", "PASS", f"{url.scheme}://{url.host}")
+
+
+def _check_llm_model(settings: Settings) -> DoctorCheck:
+    if not str(settings.llm_model).strip():
+        return DoctorCheck("llm_model", "FAIL", "LLM_MODEL 不能为空")
+    return DoctorCheck("llm_model", "PASS", "已配置")
 
 
 def _check_credentials(settings: Settings) -> list[DoctorCheck]:

@@ -40,6 +40,7 @@ def test_doctor_accepts_safe_local_configuration_with_warnings(tmp_path):
     assert statuses["bind_available"] == "PASS"
     assert statuses["onebot_token"] == "WARN"
     assert statuses["llm_api_key"] == "WARN"
+    assert statuses["llm_model"] == "PASS"
     assert statuses["onebot_exposure"] == "WARN"
     assert statuses["llm_transport"] == "PASS"
     assert statuses["admin_ids"] == "WARN"
@@ -295,3 +296,9 @@ def test_doctor_rejects_inverted_non_llm_reply_delay_range(tmp_path):
         )
     )
     assert statuses["numeric_limits"] == "FAIL"
+
+
+def test_doctor_rejects_blank_llm_model(tmp_path):
+    statuses = _statuses(run_checks(_settings(tmp_path, llm_model="   ")))
+
+    assert statuses["llm_model"] == "FAIL"
