@@ -18,6 +18,7 @@ import httpx
 
 from rumi_helper.security.config import onebot_token_values_conflict
 from rumi_helper.security.identifiers import is_ascii_decimal_id
+from rumi_helper.utils import truncate_for_qq
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -49,7 +50,7 @@ def main() -> int:
         print(__doc__)
         return 2
 
-    target, message = sys.argv[1], sys.argv[2]
+    target, message = sys.argv[1], truncate_for_qq(str(sys.argv[2]))
     type_, sep, target_id = target.partition(":")
     type_ = type_.strip().lower()
     if (
@@ -107,7 +108,9 @@ def main() -> int:
         print("发送失败：OneBot 返回格式无效")
         return 1
     if data.get("status") in ("ok", "async") or data.get("retcode") == 0:
-        print(f"发送成功 message_id={data.get('data', {}).get('message_id')}")
+        payload = data.get("data")
+        message_id = payload.get("message_id") if isinstance(payload, dict) else None
+        print(f"发送成功 message_id={message_id}")
         return 0
     print(
         "发送失败："

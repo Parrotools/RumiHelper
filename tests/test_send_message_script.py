@@ -122,6 +122,54 @@ def test_main_marks_cq_code_payload_as_plain_text(monkeypatch):
     assert captured["json"]["auto_escape"] is True
 
 
+@pytest.mark.parametrize("payload", [None, "unexpected", [], 42])
+def test_main_handles_malformed_success_data_without_traceback(
+    monkeypatch,
+    capsys,
+    payload,
+):
+    monkeypatch.setattr(
+        send_message.httpx,
+        "post",
+        lambda *args, **kwargs: FakeResponse(
+            {"status": "ok", "retcode": 0, "data": payload}
+        ),
+    )
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", "user:123", "hello"],
+    )
+    monkeypatch.setenv("ONEBOT_HTTP_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "")
+    monkeypatch.delenv("ONEBOT_V11_ACCESS_TOKEN", raising=False)
+
+    assert send_message.main() == 0
+    assert "message_id=None" in capsys.readouterr().out
+
+
+def test_main_truncates_oversized_message(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["message"] = json["message"]
+        return FakeResponse({"status": "ok", "retcode": 0, "data": {"message_id": 9}})
+
+    monkeypatch.setattr(send_message.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", "user:123", "x" * 5000],
+    )
+    monkeypatch.setenv("ONEBOT_HTTP_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "")
+    monkeypatch.delenv("ONEBOT_V11_ACCESS_TOKEN", raising=False)
+
+    assert send_message.main() == 0
+    assert len(captured["message"]) == 4000
+    assert "内容过长已截断" in captured["message"]
+
+
 def test_main_handles_invalid_json_without_traceback(monkeypatch, capsys):
     monkeypatch.setattr(
         send_message.httpx,
