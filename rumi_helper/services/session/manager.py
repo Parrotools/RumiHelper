@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from rumi_helper.database.db import Database
 
 _TRUNCATION_MARKER = "\n…[上下文已截断]…\n"
+_PERSISTED_ROLES = frozenset({"user", "assistant"})
 
 
 class SessionManager:
@@ -68,7 +69,10 @@ class SessionManager:
             content = str(row["content"])
             if len(content) > remaining:
                 content = content[-remaining:]
-            selected.append({"role": row["role"], "content": content})
+            role = str(row["role"])
+            if role not in _PERSISTED_ROLES:
+                role = "user"
+            selected.append({"role": role, "content": content})
             remaining -= len(content)
         selected.reverse()
         return selected
@@ -107,13 +111,20 @@ class SessionManager:
         session_key: str,
         messages: list[tuple[str, str]],
     ) -> None:
+        normalized: list[tuple[str, str]] = []
+        for role, content in messages:
+            role = str(role)
+            if role not in _PERSISTED_ROLES:
+                raise ValueError("会话消息 role 只能是 user 或 assistant")
+            normalized.append((role, self._truncate_message(str(content))))
+
         async with self._db.operation():
             try:
                 await self._db.conn.executemany(
                     "INSERT INTO messages (session_key, role, content) VALUES (?, ?, ?)",
                     [
-                        (session_key, role, self._truncate_message(str(content)))
-                        for role, content in messages
+                        (session_key, role, content)
+                        for role, content in normalized
                     ],
                 )
                 await self._db.conn.execute(
