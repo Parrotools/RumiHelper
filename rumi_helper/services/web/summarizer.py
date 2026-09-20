@@ -26,6 +26,7 @@ _SINGLE_INSTRUCTION = "请总结以下网页内容，严格按格式输出：标
 _MAP_MAX_TOKENS = 700
 _FINAL_MAX_TOKENS = 1200
 _MAX_PARTIAL_CHARS = 4000
+_MAX_TITLE_CHARS = 512
 
 
 def chunk_text(text: str, chunk_chars: int = 4000, overlap: int = 200) -> list[str]:
@@ -71,8 +72,11 @@ class WebSummarizer:
         *,
         label: str,
     ) -> str:
+        title = str(doc.title or "（无标题）").strip()
+        if len(title) > _MAX_TITLE_CHARS:
+            title = title[:_MAX_TITLE_CHARS] + "…"
         return wrap_untrusted_content(
-            f"网页标题：{doc.title or '（无标题）'}\n"
+            f"网页标题：{title}\n"
             f"网页 URL：{prompt_url}\n\n"
             f"{label}：\n{content}"
         )

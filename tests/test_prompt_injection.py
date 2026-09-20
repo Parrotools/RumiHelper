@@ -116,6 +116,30 @@ async def test_summarizer_redacts_sensitive_url_components_before_llm():
     assert "https://example.com/…" in user_msg
 
 
+async def test_summarizer_bounds_untrusted_page_title_in_every_prompt():
+    provider = RecordingProvider(reply="ok")
+    summarizer = WebSummarizer(
+        provider,
+        chunk_chars=100,
+        max_chunks=2,
+    )
+    huge_title = "T" * 5000
+    doc = WebDocument(
+        url="https://example.com/long-title",
+        title=huge_title,
+        text="body " * 100,
+    )
+
+    await summarizer.summarize(doc)
+
+    assert len(provider.calls) == 3
+    for call in provider.calls:
+        user_content = call[-1]["content"]
+        assert "T" * 512 in user_content
+        assert "T" * 513 not in user_content
+        assert huge_title not in user_content
+
+
 async def test_summarizer_never_receives_dispatcher():
     """总结链路依赖只有 LLMProvider，类型上不存在发送能力。"""
     import inspect
