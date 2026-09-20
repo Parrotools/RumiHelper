@@ -432,3 +432,69 @@ async def test_init_runtime_rejects_blank_llm_model_before_creating_resources(
 
     assert runtime_module._runtime is None
     assert TrackingDatabase.instances == []
+
+
+@pytest.mark.asyncio
+async def test_confirmation_housekeeping_expires_unvisited_pending_payloads(tmp_path):
+    db = Database(str(tmp_path / "pending-housekeeping.db"))
+    await db.connect()
+    action_id = await db.create_pending_agent_action(
+        "user-pending",
+        "private:user-pending",
+        "memory_save",
+        '{"content":"private-memory"}',
+        "private memory summary",
+        "9999-01-01T00:00:00+00:00",
+    )
+    broadcast_id = await db.create_pending_broadcast(
+        "admin-pending",
+        [{"type": "user", "id": "123"}],
+        "private broadcast",
+        ttl_seconds=300,
+    )
+    await db.execute(
+        "UPDATE pending_agent_actions SET expires_at = ? WHERE id = ?",
+        ("2001-01-01T00:00:00+00:00", action_id),
+    )
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("2001-01-01 00:00:00", broadcast_id),
+    )
+
+    housekeeping = asyncio.create_task(
+        runtime_module._confirmation_housekeeping_loop(
+            db,
+            interval_seconds=0.01,
+        )
+    )
+    try:
+        for _ in range(50):
+            action = await db.fetchone(
+                "SELECT status, arguments, summary "
+                "FROM pending_agent_actions WHERE id = ?",
+                (action_id,),
+            )
+            broadcast = await db.fetchone(
+                "SELECT status, targets_json, content "
+                "FROM pending_broadcasts WHERE id = ?",
+                (broadcast_id,),
+            )
+            if action["status"] == "expired" and broadcast["status"] == "expired":
+                break
+            await asyncio.sleep(0.01)
+
+        assert action == {
+            "status": "expired",
+            "arguments": "{}",
+            "summary": "",
+        }
+        assert broadcast == {
+            "status": "expired",
+            "targets_json": "[]",
+            "content": "",
+        }
+    finally:
+        housekeeping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await housekeeping
+        await db.close()

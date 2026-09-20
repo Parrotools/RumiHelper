@@ -127,6 +127,19 @@ class PendingBroadcastRepository:
             await self.conn.commit()
             return False
 
+    async def expire_pending_broadcasts(self, now: str) -> int:
+        """Expire untouched confirmations and redact recipient/content data."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE pending_broadcasts "
+            "SET status = ?, targets_json = '[]', content = '' "
+            "WHERE status = ? AND expires_at <= ?",
+            (_PENDING_EXPIRED, _PENDING_ACTIVE, str(now)),
+        ) as cursor:
+            changed = cursor.rowcount
+        await self._prune_terminal_broadcasts_unlocked()
+        await self.conn.commit()
+        return changed
+
     async def recover_executing_broadcasts(self, now: str) -> int:
         """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(

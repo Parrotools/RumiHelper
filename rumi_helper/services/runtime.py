@@ -68,21 +68,40 @@ _runtime: Runtime | None = None
 _runtime_lock = asyncio.Lock()
 
 
-async def _recover_expired_confirmations(db: Database) -> tuple[int, int]:
+async def _recover_expired_confirmations(
+    db: Database,
+) -> tuple[int, int, int, int]:
     now = datetime.now(UTC)
-    recovered_agent_actions = await db.recover_executing_agent_actions(
-        now.isoformat()
-    )
-    recovered_broadcasts = await db.recover_executing_broadcasts(
-        now.strftime("%Y-%m-%d %H:%M:%S")
-    )
-    if recovered_agent_actions or recovered_broadcasts:
-        logging.getLogger(__name__).warning(
-            "恢复过期执行状态 agent_actions=%s broadcasts=%s；已标记为 failed，未自动重试",
+    agent_now = now.isoformat()
+    broadcast_now = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    expired_agent_actions = await db.expire_pending_agent_actions(agent_now)
+    expired_broadcasts = await db.expire_pending_broadcasts(broadcast_now)
+    recovered_agent_actions = await db.recover_executing_agent_actions(agent_now)
+    recovered_broadcasts = await db.recover_executing_broadcasts(broadcast_now)
+
+    if any(
+        (
+            expired_agent_actions,
+            expired_broadcasts,
             recovered_agent_actions,
             recovered_broadcasts,
         )
-    return recovered_agent_actions, recovered_broadcasts
+    ):
+        logging.getLogger(__name__).warning(
+            "清理过期确认 pending_agent=%s pending_broadcast=%s "
+            "executing_agent=%s executing_broadcast=%s；敏感参数已清空",
+            expired_agent_actions,
+            expired_broadcasts,
+            recovered_agent_actions,
+            recovered_broadcasts,
+        )
+    return (
+        expired_agent_actions,
+        expired_broadcasts,
+        recovered_agent_actions,
+        recovered_broadcasts,
+    )
 
 
 async def _confirmation_housekeeping_loop(

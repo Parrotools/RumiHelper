@@ -1077,3 +1077,68 @@ async def test_pending_agent_action_replacement_across_connections_leaves_one_pe
     finally:
         await first.close()
         await second.close()
+
+
+@pytest.mark.asyncio
+async def test_expire_pending_agent_actions_redacts_only_expired_pending(db):
+    expired_id = await db.create_pending_agent_action(
+        "user-expired",
+        "private:user-expired",
+        "memory_save",
+        '{"content":"secret-expired"}',
+        "secret expired summary",
+        "2001-01-01T00:00:00+00:00",
+    )
+    fresh_id = await db.create_pending_agent_action(
+        "user-fresh",
+        "private:user-fresh",
+        "memory_save",
+        '{"content":"secret-fresh"}',
+        "fresh summary",
+        "9999-01-01T00:00:00+00:00",
+    )
+    executing_id = await db.create_pending_agent_action(
+        "user-executing",
+        "private:user-executing",
+        "memory_save",
+        '{"content":"secret-executing"}',
+        "executing summary",
+        "2001-01-01T00:00:00+00:00",
+    )
+    claimed = await db.claim_pending_agent_action(
+        "user-executing",
+        "private:user-executing",
+        "2000-01-01T00:00:00+00:00",
+    )
+    assert claimed is not None and claimed["id"] == executing_id
+
+    assert (
+        await db.expire_pending_agent_actions("2002-01-01T00:00:00+00:00")
+        == 1
+    )
+
+    rows = await db.fetchall(
+        "SELECT id, status, arguments, summary "
+        "FROM pending_agent_actions ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {
+            "id": expired_id,
+            "status": "expired",
+            "arguments": "{}",
+            "summary": "",
+        },
+        {
+            "id": fresh_id,
+            "status": "pending",
+            "arguments": '{"content":"secret-fresh"}',
+            "summary": "fresh summary",
+        },
+        {
+            "id": executing_id,
+            "status": "executing",
+            "arguments": '{"content":"secret-executing"}',
+            "summary": "executing summary",
+        },
+    ]

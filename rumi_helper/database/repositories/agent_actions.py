@@ -119,6 +119,19 @@ class AgentActionRepository:
             pending["status"] = "executing"
             return pending
 
+    async def expire_pending_agent_actions(self, now: str) -> int:
+        """Expire untouched confirmations and redact their sensitive payloads."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE pending_agent_actions "
+            "SET status = 'expired', arguments = '{}', summary = '' "
+            "WHERE status = 'pending' AND expires_at <= ?",
+            (str(now),),
+        ) as cursor:
+            changed = cursor.rowcount
+        await self._prune_terminal_agent_actions_unlocked()
+        await self.conn.commit()
+        return changed
+
     async def recover_executing_agent_actions(self, now: str) -> int:
         """Fail only expired executions; fresh ones may still belong to another live process."""
         async with self.operation(), self.conn.execute(

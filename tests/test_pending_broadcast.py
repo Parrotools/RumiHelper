@@ -353,3 +353,65 @@ async def test_concurrent_replacement_across_connections_leaves_only_one_active(
     finally:
         await first.close()
         await second.close()
+
+
+async def test_expire_pending_broadcasts_redacts_only_expired_active(db):
+    expired_id = await db.create_pending_broadcast(
+        "admin-expired",
+        [{"type": "user", "id": "123"}],
+        "secret expired",
+        ttl_seconds=300,
+    )
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("2001-01-01 00:00:00", expired_id),
+    )
+    fresh_id = await db.create_pending_broadcast(
+        "admin-fresh",
+        [{"type": "user", "id": "456"}],
+        "secret fresh",
+        ttl_seconds=300,
+    )
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("9999-01-01 00:00:00", fresh_id),
+    )
+    executing_id = await db.create_pending_broadcast(
+        "admin-executing",
+        [{"type": "user", "id": "789"}],
+        "secret executing",
+        ttl_seconds=300,
+    )
+    assert await db.claim_pending(executing_id)
+    await db.execute(
+        "UPDATE pending_broadcasts SET expires_at = ? WHERE id = ?",
+        ("2001-01-01 00:00:00", executing_id),
+    )
+
+    assert await db.expire_pending_broadcasts("2002-01-01 00:00:00") == 1
+
+    rows = await db.fetchall(
+        "SELECT id, status, targets_json, content "
+        "FROM pending_broadcasts ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {
+            "id": expired_id,
+            "status": "expired",
+            "targets_json": "[]",
+            "content": "",
+        },
+        {
+            "id": fresh_id,
+            "status": "active",
+            "targets_json": '[{"type": "user", "id": "456"}]',
+            "content": "secret fresh",
+        },
+        {
+            "id": executing_id,
+            "status": "executing",
+            "targets_json": '[{"type": "user", "id": "789"}]',
+            "content": "secret executing",
+        },
+    ]
