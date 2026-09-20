@@ -11,14 +11,24 @@ class MemoryRepository:
     ) -> int:
         async with self.operation():
             try:
-                cursor = await self.conn.execute(
-                    "INSERT INTO memories (user_id, type, content, importance) VALUES (?, ?, ?, ?)",
+                await self.conn.execute(
+                    "INSERT INTO memories (user_id, type, content, importance) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, type, content) DO UPDATE SET "
+                    "importance = MAX(memories.importance, excluded.importance), "
+                    "updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')",
                     (user_id, memory_type, content, importance),
                 )
-                memory_id = int(cursor.lastrowid)
+                row = await self.fetchone(
+                    "SELECT id FROM memories "
+                    "WHERE user_id = ? AND type = ? AND content = ?",
+                    (user_id, memory_type, content),
+                )
+                memory_id = int(row["id"])
                 await self.conn.execute(
                     "DELETE FROM memories WHERE user_id = ? AND id NOT IN ("
-                    "  SELECT id FROM memories WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+                    "  SELECT id FROM memories WHERE user_id = ? "
+                    "  ORDER BY datetime(updated_at) DESC, updated_at DESC, id DESC LIMIT ?"
                     ")",
                     (user_id, user_id, max(1, int(max_per_user))),
                 )

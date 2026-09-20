@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == list(range(1, 19))
+        assert await upgraded.migration_versions() == list(range(1, 20))
         columns = await upgraded.fetchall("PRAGMA table_info(outbound_messages)", ())
         assert "lease_token" in {str(column["name"]) for column in columns}
         control_columns = await upgraded.fetchall(
@@ -195,7 +195,7 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
 
 
 async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
-    expected = list(range(1, 19))
+    expected = list(range(1, 20))
     for index in range(10):
         path = str(tmp_path / f"concurrent-connect-{index}.db")
         first = Database(path)
@@ -382,7 +382,7 @@ async def test_message_role_sanitization_migration_downgrades_legacy_system_role
     upgraded = Database(path)
     await upgraded.connect()
     try:
-        assert await upgraded.migration_versions() == list(range(1, 19))
+        assert await upgraded.migration_versions() == list(range(1, 20))
         assert await upgraded.fetchone(
             "SELECT role, content FROM messages WHERE session_key = ?",
             ("private:legacy",),
@@ -458,7 +458,7 @@ async def test_github_repository_nocase_migration_merges_legacy_duplicates(tmp_p
     upgraded = Database(path)
     await upgraded.connect()
     try:
-        assert await upgraded.migration_versions() == list(range(1, 19))
+        assert await upgraded.migration_versions() == list(range(1, 20))
         repos = await upgraded.fetchall(
             "SELECT id, owner_id, repo_owner, repo_name "
             "FROM github_repositories ORDER BY id",
@@ -506,6 +506,66 @@ async def test_github_repository_nocase_migration_merges_legacy_duplicates(tmp_p
                 "(owner_id, repo_owner, repo_name, repo_url) "
                 "VALUES ('user-1', 'openai', 'OPENAI-PYTHON', "
                 "'https://github.com/openai/OPENAI-PYTHON')",
+                (),
+            )
+    finally:
+        await upgraded.close()
+
+
+async def test_memory_dedup_migration_merges_legacy_duplicates(tmp_path):
+    path = str(tmp_path / "legacy-memory-duplicates.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.execute(
+            "CREATE TABLE schema_migrations "
+            "(version INTEGER PRIMARY KEY, "
+            "applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+        )
+        await legacy.executemany(
+            "INSERT INTO schema_migrations (version) VALUES (?)",
+            [(version,) for version in range(1, 19)],
+        )
+        await legacy.execute(
+            "INSERT INTO memories "
+            "(user_id, type, content, importance, created_at, updated_at) "
+            "VALUES ('user-1', 'fact', 'same', 0.7, "
+            "'2030-01-01 00:00:00', '2030-01-01 00:00:00')"
+        )
+        keep = await legacy.execute(
+            "INSERT INTO memories "
+            "(user_id, type, content, importance, created_at, updated_at) "
+            "VALUES ('user-1', 'fact', 'same', 0.9, "
+            "'2030-01-02 00:00:00', '2030-01-02 00:00:00')"
+        )
+        keep_id = int(keep.lastrowid)
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    upgraded = Database(path)
+    await upgraded.connect()
+    try:
+        assert await upgraded.migration_versions() == list(range(1, 20))
+        rows = await upgraded.fetchall(
+            "SELECT id, user_id, type, content, importance, updated_at "
+            "FROM memories ORDER BY id",
+            (),
+        )
+        assert rows == [
+            {
+                "id": keep_id,
+                "user_id": "user-1",
+                "type": "fact",
+                "content": "same",
+                "importance": 0.9,
+                "updated_at": "2030-01-02 00:00:00",
+            }
+        ]
+        with pytest.raises(sqlite3.IntegrityError):
+            await upgraded.execute(
+                "INSERT INTO memories (user_id, type, content, importance) "
+                "VALUES ('user-1', 'fact', 'same', 0.8)",
                 (),
             )
     finally:

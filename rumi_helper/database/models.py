@@ -323,6 +323,39 @@ CREATE INDEX IF NOT EXISTS idx_session_turn_leases_expiry
     ON session_turn_leases(expires_at);
 """
 
+MEMORY_DEDUP_SCHEMA = """
+UPDATE memories
+SET importance = (
+        SELECT MAX(other.importance)
+        FROM memories AS other
+        WHERE other.user_id = memories.user_id
+          AND other.type = memories.type
+          AND other.content = memories.content
+    ),
+    updated_at = (
+        SELECT MAX(other.updated_at)
+        FROM memories AS other
+        WHERE other.user_id = memories.user_id
+          AND other.type = memories.type
+          AND other.content = memories.content
+    )
+WHERE id IN (
+    SELECT MAX(id)
+    FROM memories
+    GROUP BY user_id, type, content
+);
+
+DELETE FROM memories
+WHERE id NOT IN (
+    SELECT MAX(id)
+    FROM memories
+    GROUP BY user_id, type, content
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_user_type_content
+    ON memories(user_id, type, content);
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -359,4 +392,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (16, OUTBOUND_NOTIFICATION_SOURCE_SCHEMA),
     (17, MESSAGE_EVENT_DEDUP_SCHEMA),
     (18, SESSION_TURN_LEASE_SCHEMA),
+    (19, MEMORY_DEDUP_SCHEMA),
 )

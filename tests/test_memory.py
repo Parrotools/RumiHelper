@@ -215,3 +215,50 @@ async def test_memory_retention_limit_holds_across_connections(tmp_path):
     finally:
         await first.close()
         await second.close()
+
+
+async def test_duplicate_memory_is_idempotent_and_keeps_higher_importance(db):
+    service = MemoryService(db, max_memories_per_user=10)
+
+    first_id = await service.save("user-1", "fact", "same", importance=0.7)
+    second_id = await service.save("user-1", "fact", "same", importance=0.95)
+    third_id = await service.save("user-1", "fact", "same", importance=0.8)
+
+    assert first_id == second_id == third_id
+    rows = await db.fetchall(
+        "SELECT id, content, importance FROM memories WHERE user_id = ?",
+        ("user-1",),
+    )
+    assert rows == [
+        {
+            "id": first_id,
+            "content": "same",
+            "importance": 0.95,
+        }
+    ]
+
+
+async def test_duplicate_memory_is_idempotent_across_connections(tmp_path):
+    path = str(tmp_path / "memory-dedup-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        first_service = MemoryService(first, max_memories_per_user=10)
+        second_service = MemoryService(second, max_memories_per_user=10)
+
+        first_id, second_id = await asyncio.gather(
+            first_service.save("user-1", "fact", "same", importance=0.7),
+            second_service.save("user-1", "fact", "same", importance=0.9),
+        )
+
+        assert first_id == second_id
+        rows = await first.fetchall(
+            "SELECT content, importance FROM memories WHERE user_id = ?",
+            ("user-1",),
+        )
+        assert rows == [{"content": "same", "importance": 0.9}]
+    finally:
+        await first.close()
+        await second.close()
