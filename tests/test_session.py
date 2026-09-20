@@ -499,3 +499,35 @@ async def test_prune_expired_session_turn_leases_keeps_live_lease(db):
         "SELECT session_key, lease_token FROM session_turn_leases ORDER BY session_key",
         (),
     ) == [{"session_key": "private:live", "lease_token": "live-token"}]
+
+
+async def test_turn_cancels_owner_when_lease_renewal_fails(db, monkeypatch):
+    sessions = SessionManager(
+        db,
+        turn_lease_seconds=5.0,
+        turn_lease_poll_seconds=0.01,
+    )
+    # Keep the production minimum intact while shortening this test's heartbeat.
+    sessions._turn_lease_seconds = 0.15
+    entered = asyncio.Event()
+
+    async def fail_renew(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database unavailable")
+
+    monkeypatch.setattr(db, "renew_session_turn", fail_renew)
+
+    async def owner():
+        async with sessions.turn(SessionManager.private_key("renew-failure")):
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(owner())
+    await entered.wait()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
+
+    assert await db.fetchone(
+        "SELECT session_key FROM session_turn_leases WHERE session_key = ?",
+        (SessionManager.private_key("renew-failure"),),
+    ) is None

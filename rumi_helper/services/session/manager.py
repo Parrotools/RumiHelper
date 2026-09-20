@@ -100,7 +100,7 @@ class SessionManager:
         stop: asyncio.Event,
         owner_task: asyncio.Task | None,
     ) -> None:
-        interval = max(1.0, self._turn_lease_seconds / 3.0)
+        interval = max(0.2, self._turn_lease_seconds / 3.0)
         while True:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=interval)
@@ -109,11 +109,19 @@ class SessionManager:
                 expires_at = datetime.now(UTC) + timedelta(
                     seconds=self._turn_lease_seconds
                 )
-                renewed = await self._db.renew_session_turn(
-                    session_key,
-                    lease_token,
-                    self._lease_timestamp(expires_at),
-                )
+                try:
+                    renewed = await self._db.renew_session_turn(
+                        session_key,
+                        lease_token,
+                        self._lease_timestamp(expires_at),
+                    )
+                except Exception as exc:  # noqa: BLE001 - lease safety must fail closed
+                    logger.error(
+                        "session turn lease renewal failed session=%s error=%s",
+                        session_key,
+                        type(exc).__name__,
+                    )
+                    renewed = False
                 if not renewed:
                     logger.error(
                         "session turn lease lost session=%s",
