@@ -501,3 +501,151 @@ async def test_github_list_in_group_refuses_private_configuration(monkeypatch):
     assert sent == [
         "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
     ]
+
+
+async def test_github_digest_in_group_refuses_private_configuration(monkeypatch):
+    sent: list[str] = []
+    runtime = SimpleNamespace()
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(github_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(github_plugin, "send_local_reply", fake_send_local_reply)
+
+    await github_plugin._handle_github(
+        _group_event("/github digest list", at=True, mid=370)
+    )
+
+    assert sent == [
+        "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
+    ]
+
+
+async def test_github_digest_private_requires_admin(monkeypatch):
+    sent: list[str] = []
+    runtime = SimpleNamespace(
+        permission=SimpleNamespace(is_admin=lambda _user_id: False),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(github_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(github_plugin, "send_local_reply", fake_send_local_reply)
+
+    await github_plugin._handle_github(
+        _private_event("/github digest list", user=20000, mid=371)
+    )
+
+    assert sent == ["该命令仅管理员可用。"]
+
+
+async def test_github_watch_other_target_requires_admin_at_plugin_boundary(monkeypatch):
+    sent: list[str] = []
+
+    class FailIfWatched:
+        async def watch(self, *_args, **_kwargs):
+            raise AssertionError("non-admin watch must not reach service")
+
+    runtime = SimpleNamespace(
+        github=FailIfWatched(),
+        permission=SimpleNamespace(is_admin=lambda _user_id: False),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(github_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(github_plugin, "send_local_reply", fake_send_local_reply)
+
+    await github_plugin._handle_github(
+        _private_event(
+            "/github watch https://github.com/OpenAI/openai-python user:999",
+            user=20000,
+            mid=372,
+        )
+    )
+
+    assert sent == [
+        "普通用户只能把 GitHub 通知发送给自己的私聊；其他用户或群聊目标仅管理员可配置。"
+    ]
+
+
+async def test_reminder_notification_disabled_does_not_create_task(monkeypatch):
+    sent: list[str] = []
+
+    class Notifications:
+        async def get(self, _user_id: str):
+            return {"reminder_notify": False}
+
+    class FailScheduler:
+        async def create_reminder(self, *_args, **_kwargs):
+            raise AssertionError("disabled reminder must not create a task")
+
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(scheduler_timezone="UTC"),
+        notifications=Notifications(),
+        scheduler=FailScheduler(),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(scheduler_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(scheduler_plugin, "send_local_reply", fake_send_local_reply)
+
+    await scheduler_plugin._handle_remind(
+        _private_event(
+            "/remind 2030-01-02 08:30 -- test",
+            user=20000,
+            mid=373,
+        )
+    )
+
+    assert sent == ["提醒通知默认关闭，请先发送 /notify reminder on。"]
+
+
+async def test_schedule_plugin_rejects_non_admin_before_parsing(monkeypatch):
+    sent: list[str] = []
+    runtime = SimpleNamespace(
+        permission=SimpleNamespace(is_admin=lambda _user_id: False),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(scheduler_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(scheduler_plugin, "send_local_reply", fake_send_local_reply)
+
+    await scheduler_plugin._handle_schedule(
+        _private_event("/schedule malformed", user=20000, mid=374)
+    )
+
+    assert sent == ["该命令仅管理员可用。"]
+
+
+async def test_reminder_format_error_does_not_touch_notification_settings(monkeypatch):
+    sent: list[str] = []
+
+    class FailNotifications:
+        async def get(self, _user_id: str):
+            raise AssertionError("invalid command must fail before settings lookup")
+
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(scheduler_timezone="UTC"),
+        notifications=FailNotifications(),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message: str):
+        sent.append(message)
+
+    monkeypatch.setattr(scheduler_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(scheduler_plugin, "send_local_reply", fake_send_local_reply)
+
+    await scheduler_plugin._handle_remind(
+        _private_event("/remind definitely-invalid", user=20000, mid=375)
+    )
+
+    assert len(sent) == 1
+    assert sent[0].startswith("格式错误：")
