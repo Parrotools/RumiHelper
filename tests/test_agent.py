@@ -1142,3 +1142,45 @@ async def test_expire_pending_agent_actions_redacts_only_expired_pending(db):
             "summary": "executing summary",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_pending_agent_action_claim_across_connections_has_single_winner(tmp_path):
+    path = str(tmp_path / "agent-claim-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        action_id = await first.create_pending_agent_action(
+            "user-1",
+            "private:user-1",
+            "memory_save",
+            '{"content":"once"}',
+            "save once",
+            "9999-01-01T00:00:00+00:00",
+        )
+
+        first_claim, second_claim = await asyncio.gather(
+            first.claim_pending_agent_action(
+                "user-1",
+                "private:user-1",
+                "2000-01-01T00:00:00+00:00",
+            ),
+            second.claim_pending_agent_action(
+                "user-1",
+                "private:user-1",
+                "2000-01-01T00:00:00+00:00",
+            ),
+        )
+
+        winners = [claim for claim in (first_claim, second_claim) if claim is not None]
+        assert len(winners) == 1
+        assert winners[0]["id"] == action_id
+        assert await first.fetchone(
+            "SELECT status FROM pending_agent_actions WHERE id = ?",
+            (action_id,),
+        ) == {"status": "executing"}
+    finally:
+        await first.close()
+        await second.close()

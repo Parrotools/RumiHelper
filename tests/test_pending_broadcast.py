@@ -415,3 +415,32 @@ async def test_expire_pending_broadcasts_redacts_only_expired_active(db):
             "content": "secret executing",
         },
     ]
+
+
+async def test_broadcast_claim_across_connections_has_single_winner(tmp_path):
+    path = str(tmp_path / "broadcast-claim-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        pending_id = await first.create_pending_broadcast(
+            "admin1",
+            [{"type": "user", "id": "123"}],
+            "send once",
+            ttl_seconds=300,
+        )
+
+        results = await asyncio.gather(
+            first.claim_pending(pending_id),
+            second.claim_pending(pending_id),
+        )
+
+        assert sorted(results) == [False, True]
+        assert await first.fetchone(
+            "SELECT status FROM pending_broadcasts WHERE id = ?",
+            (pending_id,),
+        ) == {"status": "executing"}
+    finally:
+        await first.close()
+        await second.close()
