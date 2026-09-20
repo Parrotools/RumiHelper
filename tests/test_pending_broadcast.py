@@ -319,3 +319,37 @@ async def test_confirm_revalidates_persisted_broadcast_payload(
         "targets_json": "[]",
         "content": "",
     }
+
+
+async def test_concurrent_replacement_across_connections_leaves_only_one_active(tmp_path):
+    path = str(tmp_path / "broadcast-replacement-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        async def create(database, content: str) -> int:
+            return await database.create_pending_broadcast(
+                "admin1",
+                [{"type": "user", "id": "123"}],
+                content,
+                ttl_seconds=300,
+            )
+
+        await asyncio.gather(
+            create(first, "first"),
+            create(second, "second"),
+        )
+
+        rows = await first.fetchall(
+            "SELECT content, targets_json, status FROM pending_broadcasts ORDER BY id",
+            (),
+        )
+        assert [row["status"] for row in rows].count("active") == 1
+        assert [row["status"] for row in rows].count("cancelled") == 1
+        cancelled = next(row for row in rows if row["status"] == "cancelled")
+        assert cancelled["content"] == ""
+        assert cancelled["targets_json"] == "[]"
+    finally:
+        await first.close()
+        await second.close()

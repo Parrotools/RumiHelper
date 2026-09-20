@@ -1039,3 +1039,41 @@ async def test_terminal_agent_action_history_is_bounded(db, monkeypatch):
             "summary": "still pending",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_pending_agent_action_replacement_across_connections_leaves_one_pending(tmp_path):
+    path = str(tmp_path / "agent-replacement-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        async def create(database, tool_name: str) -> int:
+            return await database.create_pending_agent_action(
+                "user-1",
+                "private:user-1",
+                tool_name,
+                "{}",
+                tool_name,
+                "9999-01-01T00:00:00+00:00",
+            )
+
+        await asyncio.gather(
+            create(first, "memory_save"),
+            create(second, "clear_session"),
+        )
+
+        rows = await first.fetchall(
+            "SELECT tool_name, status, arguments, summary "
+            "FROM pending_agent_actions ORDER BY id",
+            (),
+        )
+        assert [row["status"] for row in rows].count("pending") == 1
+        assert [row["status"] for row in rows].count("cancelled") == 1
+        cancelled = next(row for row in rows if row["status"] == "cancelled")
+        assert cancelled["arguments"] == "{}"
+        assert cancelled["summary"] == ""
+    finally:
+        await first.close()
+        await second.close()
