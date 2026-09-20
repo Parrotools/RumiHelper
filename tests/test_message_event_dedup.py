@@ -118,3 +118,51 @@ async def test_message_event_history_prunes_in_batches(tmp_path, monkeypatch):
         ]
     finally:
         await db.close()
+
+
+def test_event_dedup_key_scopes_message_id_by_bot_and_conversation():
+    from nonebot.adapters.onebot.v11 import GroupMessageEvent, Message, PrivateMessageEvent
+    from nonebot.adapters.onebot.v11.event import Sender
+
+    from rumi_helper.plugins.chat_message_utils import event_dedup_key
+
+    def private(self_id: int, user_id: int):
+        return PrivateMessageEvent(
+            time=0,
+            self_id=self_id,
+            post_type="message",
+            sub_type="friend",
+            user_id=user_id,
+            message_type="private",
+            message_id=77,
+            message=Message("x"),
+            raw_message="x",
+            font=0,
+            sender=Sender(user_id=user_id, nickname="u"),
+        )
+
+    def group(self_id: int, group_id: int, user_id: int):
+        return GroupMessageEvent(
+            time=0,
+            self_id=self_id,
+            post_type="message",
+            sub_type="normal",
+            user_id=user_id,
+            message_type="group",
+            message_id=77,
+            group_id=group_id,
+            message=Message("x"),
+            raw_message="x",
+            font=0,
+            sender=Sender(user_id=user_id, nickname="u"),
+        )
+
+    keys = {
+        event_dedup_key(private(10000, 20001)),
+        event_dedup_key(private(10000, 20002)),
+        event_dedup_key(group(10000, 30001, 20001)),
+        event_dedup_key(group(10000, 30002, 20001)),
+        event_dedup_key(private(10001, 20001)),
+    }
+
+    assert len(keys) == 5
