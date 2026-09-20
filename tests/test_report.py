@@ -383,3 +383,74 @@ async def test_concurrent_report_services_enqueue_period_once(tmp_path):
     finally:
         await first_db.close()
         await second_db.close()
+
+
+async def test_concurrent_report_generation_is_idempotent_across_connections(tmp_path):
+    path = str(tmp_path / "report-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        first_notifications = NotificationSettingsService(first_db)
+        second_notifications = NotificationSettingsService(second_db)
+        await first_notifications.set("user-1", daily_report=True)
+
+        first_dispatcher = FakeDispatcher()
+        second_dispatcher = FakeDispatcher()
+        first_service = ReportService(
+            first_db,
+            first_dispatcher,
+            first_notifications,
+            timezone_name="UTC",
+        )
+        second_service = ReportService(
+            second_db,
+            second_dispatcher,
+            second_notifications,
+            timezone_name="UTC",
+        )
+
+        entered = 0
+        release = asyncio.Event()
+
+        class BarrierReportService(ReportService):
+            async def build_daily_report(self, owner_id: str, report_date=None) -> str:
+                nonlocal entered
+                entered += 1
+                if entered >= 2:
+                    release.set()
+                await release.wait()
+                return await super().build_daily_report(owner_id, report_date)
+
+        first_service = BarrierReportService(
+            first_db,
+            first_dispatcher,
+            first_notifications,
+            timezone_name="UTC",
+        )
+        second_service = BarrierReportService(
+            second_db,
+            second_dispatcher,
+            second_notifications,
+            timezone_name="UTC",
+        )
+
+        task = {"report_date": "2030-01-02"}
+        await asyncio.gather(
+            first_service.run_scheduled_report(task),
+            second_service.run_scheduled_report(task),
+        )
+
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM reports",
+            (),
+        ) == {"count": 1}
+        assert await first_db.fetchone(
+            "SELECT COUNT(*) AS count FROM outbound_messages",
+            (),
+        ) == {"count": 1}
+        assert first_dispatcher.wake_calls + second_dispatcher.wake_calls == 1
+    finally:
+        await first_db.close()
+        await second_db.close()
