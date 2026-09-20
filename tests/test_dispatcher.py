@@ -94,7 +94,7 @@ async def test_broadcast_rate_limit(db):
     assert elapsed >= 0.045
 
 
-async def test_concurrent_sends_share_process_wide_rate_limit(db):
+async def test_concurrent_sends_share_database_wide_rate_limit(db):
     started: list[float] = []
 
     async def caller(action: str, **params) -> dict:
@@ -115,6 +115,48 @@ async def test_concurrent_sends_share_process_wide_rate_limit(db):
 
     assert len(started) == 3
     assert started[-1] - started[0] >= 0.03
+
+
+async def test_separate_dispatchers_share_database_wide_rate_limit(tmp_path):
+    path = str(tmp_path / "send-rate-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    started: list[float] = []
+
+    async def first_caller(action: str, **params) -> dict:
+        started.append(time.monotonic())
+        return {"message_id": "first"}
+
+    async def second_caller(action: str, **params) -> dict:
+        started.append(time.monotonic())
+        return {"message_id": "second"}
+
+    try:
+        first = MessageDispatcher(
+            first_db,
+            rate_limit_per_second=20,
+            api_caller=first_caller,
+        )
+        second = MessageDispatcher(
+            second_db,
+            rate_limit_per_second=20,
+            api_caller=second_caller,
+        )
+
+        first_result, second_result = await asyncio.gather(
+            first.send_user("101", "one"),
+            second.send_user("202", "two"),
+        )
+
+        assert first_result.success is True
+        assert second_result.success is True
+        assert len(started) == 2
+        assert max(started) - min(started) >= 0.04
+    finally:
+        await first_db.close()
+        await second_db.close()
 
 
 async def test_waiting_send_stops_after_concurrent_rate_limit_failure(db):

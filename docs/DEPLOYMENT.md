@@ -66,7 +66,7 @@ NapCat 是客户端，Bot 是服务端。两者同机时使用 `ws://127.0.0.1:8
 | `DATABASE_PATH` | `data/bot.db` | SQLite 数据库路径 |
 | `GITHUB_CHECK_CRON` | `0 * * * *` | GitHub 检查频率；留空关闭 |
 | `DAILY_REPORT_CRON` | `0 23 * * *` | 日报时间；留空关闭 |
-| `SEND_RATE_LIMIT_PER_SECOND` | `1` | direct/broadcast/持久队列共享的进程内主动发送速率 |
+| `SEND_RATE_LIMIT_PER_SECOND` | `1` | direct/broadcast/持久队列在共享同一 SQLite 数据库的进程间统一限速 |
 | `INTERACTIVE_SEND_RATE_LIMIT_PER_SECOND` | `0.5` | 所有交互回复的统一发送速率 |
 | `OUTBOUND_MAX_ATTEMPTS` | `3` | 主动通知最大投递次数 |
 | `OUTBOUND_RETRY_DELAY_SECONDS` | `30` | 投递失败后的固定等待秒数 |

@@ -26,9 +26,16 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == list(range(1, 13))
+        assert await upgraded.migration_versions() == list(range(1, 14))
         columns = await upgraded.fetchall("PRAGMA table_info(outbound_messages)", ())
         assert "lease_token" in {str(column["name"]) for column in columns}
+        control_columns = await upgraded.fetchall(
+            "PRAGMA table_info(outbound_control)",
+            (),
+        )
+        assert "next_send_at" in {
+            str(column["name"]) for column in control_columns
+        }
     finally:
         await upgraded.close()
 
@@ -188,7 +195,7 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
 
 
 async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
-    expected = list(range(1, 13))
+    expected = list(range(1, 14))
     for index in range(10):
         path = str(tmp_path / f"concurrent-connect-{index}.db")
         first = Database(path)

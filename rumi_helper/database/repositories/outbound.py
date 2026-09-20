@@ -115,6 +115,31 @@ class OutboundRepository:
         row = await self.fetchone("SELECT paused_until FROM outbound_control WHERE id = 1", ())
         return str(row["paused_until"]) if row else "1970-01-01 00:00:00"
 
+    async def reserve_outbound_send_slot(
+        self,
+        now: str,
+        next_send_at: str,
+    ) -> bool:
+        """Atomically reserve the next global outbound-send slot."""
+        async with self.operation(), self.conn.execute(
+            "UPDATE outbound_control SET next_send_at = ? "
+            "WHERE id = 1 AND (next_send_at <= ? OR datetime(next_send_at) IS NULL)",
+            (str(next_send_at), str(now)),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
+
+    async def fetch_outbound_next_send_at(self) -> str:
+        row = await self.fetchone(
+            "SELECT next_send_at FROM outbound_control WHERE id = 1",
+            (),
+        )
+        return (
+            str(row["next_send_at"])
+            if row
+            else "1970-01-01 00:00:00.000000"
+        )
+
     async def extend_outbound_pause_until(self, paused_until: str) -> None:
         """Persist the longest known global circuit-breaker deadline."""
         await self.execute(

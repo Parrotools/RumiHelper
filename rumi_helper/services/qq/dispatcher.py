@@ -91,7 +91,6 @@ class MessageDispatcher:
         self._db = db
         self._interval = 1.0 / rate_limit_per_second if rate_limit_per_second and rate_limit_per_second > 0 else 0.0
         self._send_lock = asyncio.Lock()
-        self._next_send_at = 0.0
         self._api_caller = api_caller
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._account_pause_seconds = max(0.0, account_pause_seconds)
@@ -331,7 +330,7 @@ class MessageDispatcher:
 
         # Every active send path (direct send, broadcast, durable queue) converges
         # here. Serialize them so SEND_RATE_LIMIT_PER_SECOND is a process-wide
-        # outbound limit instead of a per-broadcast delay.
+        # database-wide outbound limit instead of a per-broadcast delay.
         async with self._send_lock:
             if await self._remaining_pause_seconds() > 0:
                 result = SendResult(
@@ -342,10 +341,7 @@ class MessageDispatcher:
                 )
             else:
                 if self._interval > 0:
-                    now = time.monotonic()
-                    delay = max(0.0, self._next_send_at - now)
-                    if delay:
-                        await asyncio.sleep(delay)
+                    await self._wait_for_global_send_slot()
                     # A different process may have persisted a cooldown while
                     # this sender waited for its slot.
                     if await self._remaining_pause_seconds() > 0:
@@ -356,7 +352,6 @@ class MessageDispatcher:
                             error="主动发送已暂停，等待账号/API恢复",
                         )
                     else:
-                        self._next_send_at = time.monotonic() + self._interval
                         result = await self._call_onebot_send(
                             action,
                             params,
@@ -373,6 +368,36 @@ class MessageDispatcher:
 
         await self._log(result, message)
         return result
+
+    async def _wait_for_global_send_slot(self) -> None:
+        """Reserve a rate-limit slot shared by every process using this database."""
+        if self._interval <= 0:
+            return
+        while True:
+            now = datetime.now(UTC)
+            next_send_at = now + timedelta(seconds=self._interval)
+            if await self._db.reserve_outbound_send_slot(
+                self._lease_timestamp(now),
+                self._lease_timestamp(next_send_at),
+            ):
+                return
+
+            reserved_text = await self._db.fetch_outbound_next_send_at()
+            try:
+                reserved = datetime.fromisoformat(str(reserved_text))
+                if reserved.tzinfo is None:
+                    reserved = reserved.replace(tzinfo=UTC)
+                else:
+                    reserved = reserved.astimezone(UTC)
+                delay = max(0.0, (reserved - datetime.now(UTC)).total_seconds())
+            except (TypeError, ValueError):
+                # reserve_outbound_send_slot repairs malformed persisted values
+                # on the next attempt; avoid a tight retry loop meanwhile.
+                delay = min(self._interval, 0.05)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            else:
+                await asyncio.sleep(0)
 
     async def _call_onebot_send(
         self,
