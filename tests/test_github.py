@@ -1244,3 +1244,95 @@ async def test_tracker_snapshot_history_limit_prunes_old_rows(db, monkeypatch):
         {"latest_commit_sha": "sha-3"},
         {"latest_commit_sha": "sha-4"},
     ]
+
+
+async def test_digest_configuration_rolls_back_targets_and_schedule_on_live_failure(
+    db,
+    monkeypatch,
+):
+    from rumi_helper.services.scheduler import SchedulerService
+
+    tracker = GitHubTracker(db, FakeGitHubClient(_snapshot("first")))
+    scheduler = SchedulerService(db, FakeDispatcher(), timezone_name="UTC")
+    scheduler.register_handler("github_digest", tracker.run_scheduled_digest)
+    old_targets = [{"target_type": "user", "target_id": "111"}]
+    await db.replace_github_digest_targets(old_targets)
+    await scheduler.sync_system_task("github_digest", "0 6 * * *")
+
+    await scheduler.start()
+    try:
+        task = await db.fetch_scheduled_task_by_owner_type(
+            "__system__",
+            "github_digest",
+        )
+        assert task is not None
+        job_id = scheduler._job_id(task["id"])
+        old_trigger = str(scheduler._scheduler.get_job(job_id).trigger)
+        original_schedule = scheduler._schedule
+        failed = False
+
+        def fail_new_schedule_once(task_row):
+            nonlocal failed
+            if (
+                not failed
+                and task_row["task_type"] == "github_digest"
+                and task_row["cron_expression"] == "5 * * * *"
+            ):
+                failed = True
+                raise RuntimeError("injected live scheduler failure")
+            return original_schedule(task_row)
+
+        monkeypatch.setattr(scheduler, "_schedule", fail_new_schedule_once)
+
+        with pytest.raises(
+            GitHubTrackerError,
+            match="定时汇总配置更新失败",
+        ):
+            await tracker.configure_digest_targets(
+                [{"target_type": "group", "target_id": "222"}],
+                scheduler,
+                "5 * * * *",
+            )
+
+        assert await db.fetch_github_digest_targets() == old_targets
+        restored = await db.fetch_scheduled_task_by_owner_type(
+            "__system__",
+            "github_digest",
+        )
+        assert restored["enabled"] == 1
+        assert restored["cron_expression"] == "0 6 * * *"
+        restored_job = scheduler._scheduler.get_job(job_id)
+        assert restored_job is not None
+        assert str(restored_job.trigger) == old_trigger
+    finally:
+        await scheduler.stop()
+
+
+async def test_digest_configuration_cancellation_restores_previous_targets(db):
+    tracker = GitHubTracker(db, FakeGitHubClient(_snapshot("first")))
+    old_targets = [{"target_type": "user", "target_id": "111"}]
+    await db.replace_github_digest_targets(old_targets)
+
+    class CancellingScheduler:
+        def __init__(self):
+            self.calls: list[tuple[str, str]] = []
+
+        async def sync_system_task(self, task_type: str, cron_expression: str):
+            self.calls.append((task_type, cron_expression))
+            if len(self.calls) == 1:
+                raise asyncio.CancelledError
+
+    scheduler = CancellingScheduler()
+
+    with pytest.raises(asyncio.CancelledError):
+        await tracker.configure_digest_targets(
+            [{"target_type": "group", "target_id": "222"}],
+            scheduler,
+            "5 * * * *",
+        )
+
+    assert await db.fetch_github_digest_targets() == old_targets
+    assert scheduler.calls == [
+        ("github_digest", "5 * * * *"),
+        ("github_digest", ""),
+    ]

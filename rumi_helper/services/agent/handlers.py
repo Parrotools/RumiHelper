@@ -82,8 +82,11 @@ async def github_digest_set(runtime: Any, user_id: str, arguments: dict[str, Any
     del user_id
     _require_private_github_config(session_key)
     targets = _bounded_targets(runtime, arguments["targets"])
-    await runtime.db.replace_github_digest_targets([target.to_dict() for target in targets])
-    await runtime.scheduler.sync_system_task("github_digest", runtime.settings.github_digest_cron)
+    await runtime.github.configure_digest_targets(
+        [target.to_dict() for target in targets],
+        runtime.scheduler,
+        runtime.settings.github_digest_cron,
+    )
     return f"GitHub 定时汇总目标已更新：{arguments['targets']}。"
 
 
@@ -101,8 +104,11 @@ async def github_digest_list(runtime: Any, user_id: str, arguments: dict[str, An
 async def github_digest_clear(runtime: Any, user_id: str, arguments: dict[str, Any], session_key: str) -> str:
     del user_id, arguments
     _require_private_github_config(session_key)
-    await runtime.db.replace_github_digest_targets([])
-    await runtime.scheduler.sync_system_task("github_digest", "")
+    await runtime.github.configure_digest_targets(
+        [],
+        runtime.scheduler,
+        "",
+    )
     return "GitHub 定时汇总目标已清空，定时发送已关闭。"
 
 

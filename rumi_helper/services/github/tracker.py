@@ -209,6 +209,59 @@ class GitHubTracker:
             except Exception:
                 logger.exception("GitHub 检查失败 repo_id=%s", repo["id"])
 
+    async def configure_digest_targets(
+        self,
+        targets: list[dict],
+        scheduler,
+        cron_expression: str,
+    ) -> None:
+        """Update digest recipients and its system task with compensating rollback."""
+        previous_targets = await self._db.fetch_github_digest_targets()
+        previous_task = await self._db.fetch_scheduled_task_by_owner_type(
+            "__system__",
+            "github_digest",
+        )
+        previous_cron = (
+            str(previous_task["cron_expression"] or "")
+            if previous_task is not None and previous_task["enabled"]
+            else ""
+        )
+
+        try:
+            await self._db.replace_github_digest_targets(targets)
+            await scheduler.sync_system_task(
+                "github_digest",
+                cron_expression if targets else "",
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._restore_digest_configuration(
+                    previous_targets,
+                    scheduler,
+                    previous_cron,
+                )
+            )
+            raise
+        except Exception as exc:
+            await self._restore_digest_configuration(
+                previous_targets,
+                scheduler,
+                previous_cron,
+            )
+            raise GitHubTrackerError("GitHub 定时汇总配置更新失败") from exc
+
+    async def _restore_digest_configuration(
+        self,
+        targets: list[dict],
+        scheduler,
+        cron_expression: str,
+    ) -> None:
+        try:
+            await self._db.replace_github_digest_targets(targets)
+            await scheduler.sync_system_task("github_digest", cron_expression)
+        except Exception:
+            logger.exception("GitHub digest 配置回滚失败")
+
     async def run_scheduled_digest(self, task: dict) -> None:
         """定时汇总所有仓库的最新 commit，并把同一份消息私发给配置收件人。"""
         del task

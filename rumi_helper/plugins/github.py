@@ -161,13 +161,19 @@ async def _handle_github(event: MessageEvent):
                 await send_local_reply(github_matcher, runtime, f"GitHub 定时汇总目标：\n{content}")
                 return
             if action == "clear":
-                await runtime.db.replace_github_digest_targets([])
-                await runtime.scheduler.sync_system_task("github_digest", "")
+                await runtime.github.configure_digest_targets(
+                    [],
+                    runtime.scheduler,
+                    "",
+                )
                 await send_local_reply(github_matcher, runtime, "GitHub 定时汇总目标已清空，定时发送已关闭。")
                 return
 
-            await runtime.db.replace_github_digest_targets(targets)
-            await runtime.scheduler.sync_system_task("github_digest", runtime.settings.github_digest_cron)
+            await runtime.github.configure_digest_targets(
+                targets,
+                runtime.scheduler,
+                runtime.settings.github_digest_cron,
+            )
             content = "\n".join(f'{target["target_type"]}:{target["target_id"]}' for target in targets)
             await send_local_reply(
                 github_matcher,
