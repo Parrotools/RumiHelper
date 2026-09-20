@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # 会话
     max_context_messages: int = 20
     max_context_chars: int = 16000
+    session_retention_days: int = 90
     group_shared_context: bool = False
 
     # 网页

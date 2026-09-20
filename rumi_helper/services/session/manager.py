@@ -10,6 +10,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 
 from rumi_helper.database.db import Database
 
@@ -153,6 +154,40 @@ class SessionManager:
         head = remaining // 2
         tail = remaining - head
         return content[:head] + _TRUNCATION_MARKER + content[-tail:]
+
+    async def prune_inactive(
+        self,
+        retention_days: int,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Delete stale session metadata and messages atomically."""
+        days = max(0, int(retention_days))
+        if days == 0:
+            return 0
+        current = now or datetime.now(UTC)
+        cutoff = (current.astimezone(UTC) - timedelta(days=days)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        async with self._db.operation():
+            try:
+                await self._db.conn.execute(
+                    "DELETE FROM messages WHERE session_key IN ("
+                    "  SELECT session_key FROM sessions "
+                    "  WHERE datetime(updated_at) < datetime(?)"
+                    ")",
+                    (cutoff,),
+                )
+                async with self._db.conn.execute(
+                    "DELETE FROM sessions WHERE datetime(updated_at) < datetime(?)",
+                    (cutoff,),
+                ) as cursor:
+                    deleted = cursor.rowcount
+                await self._db.conn.commit()
+                return max(0, int(deleted))
+            except Exception:
+                await self._db.conn.rollback()
+                raise
 
     async def clear(self, session_key: str) -> None:
         """Delete session metadata and messages atomically."""

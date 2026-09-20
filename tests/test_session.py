@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 
@@ -275,3 +276,58 @@ async def test_prepare_turn_context_caps_current_message_before_llm(db):
     assert history == []
     assert len(current) == 20
     assert "上下文已截断" in current
+
+
+async def test_prune_inactive_sessions_deletes_only_stale_session_and_messages(db):
+    sessions = SessionManager(db, max_context_messages=10)
+    stale = SessionManager.private_key("stale")
+    fresh = SessionManager.private_key("fresh")
+    await sessions.append_turn(stale, "old question", "old answer")
+    await sessions.append_turn(fresh, "new question", "new answer")
+    await db.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_key = ?",
+        ("2000-01-01 00:00:00", stale),
+    )
+    await db.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_key = ?",
+        ("2029-12-31 00:00:00", fresh),
+    )
+
+    deleted = await sessions.prune_inactive(
+        90,
+        now=datetime(2030, 1, 1, tzinfo=UTC),
+    )
+
+    assert deleted == 1
+    assert await db.fetchone(
+        "SELECT session_key FROM sessions WHERE session_key = ?",
+        (stale,),
+    ) is None
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM messages WHERE session_key = ?",
+        (stale,),
+    ) == {"count": 0}
+    assert await db.fetchone(
+        "SELECT session_key FROM sessions WHERE session_key = ?",
+        (fresh,),
+    ) == {"session_key": fresh}
+    assert len(await sessions.get_context(fresh)) == 2
+
+
+async def test_zero_session_retention_disables_cleanup(db):
+    sessions = SessionManager(db)
+    key = SessionManager.private_key("keep")
+    await sessions.append(key, "user", "keep me")
+    await db.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_key = ?",
+        ("2000-01-01 00:00:00", key),
+    )
+
+    assert await sessions.prune_inactive(
+        0,
+        now=datetime(2030, 1, 1, tzinfo=UTC),
+    ) == 0
+    assert await db.fetchone(
+        "SELECT session_key FROM sessions WHERE session_key = ?",
+        (key,),
+    ) == {"session_key": key}

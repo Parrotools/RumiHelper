@@ -8,6 +8,7 @@ from rumi_helper.config import Settings
 from rumi_helper.config_validation import RuntimeConfigurationError
 from rumi_helper.database.db import Database
 from rumi_helper.security.config import SecurityConfigurationError
+from rumi_helper.services.session.manager import SessionManager
 
 
 class TrackingDatabase(Database):
@@ -342,6 +343,50 @@ async def test_confirmation_housekeeping_expires_orphaned_executions(tmp_path):
             "targets_json": "[]",
             "content": "",
         }
+    finally:
+        housekeeping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await housekeeping
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_prunes_stale_sessions_periodically(tmp_path):
+    db = Database(str(tmp_path / "session-housekeeping.db"))
+    await db.connect()
+    sessions = SessionManager(db)
+    key = SessionManager.private_key("stale")
+    await sessions.append_turn(key, "secret question", "secret answer")
+    await db.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_key = ?",
+        ("2000-01-01 00:00:00", key),
+    )
+
+    housekeeping = asyncio.create_task(
+        runtime_module._confirmation_housekeeping_loop(
+            db,
+            interval_seconds=0.01,
+            sessions=sessions,
+            session_retention_days=30,
+            session_prune_interval_seconds=0.01,
+        )
+    )
+    try:
+        for _ in range(50):
+            row = await db.fetchone(
+                "SELECT session_key FROM sessions WHERE session_key = ?",
+                (key,),
+            )
+            if row is None:
+                break
+            await asyncio.sleep(0.01)
+
+        assert row is None
+        assert await db.fetchone(
+            "SELECT COUNT(*) AS count FROM messages WHERE session_key = ?",
+            (key,),
+        ) == {"count": 0}
+        assert housekeeping.done() is False
     finally:
         housekeeping.cancel()
         with pytest.raises(asyncio.CancelledError):

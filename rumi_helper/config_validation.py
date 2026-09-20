@@ -47,6 +47,7 @@ def numeric_limit_error(settings: Any) -> str | None:
         "outbound_terminal_history_limit": settings.outbound_terminal_history_limit,
         "send_log_history_limit": settings.send_log_history_limit,
         "scheduled_task_history_limit": settings.scheduled_task_history_limit,
+        "session_retention_days": settings.session_retention_days,
         "non_llm_reply_delay_min_seconds": settings.non_llm_reply_delay_min_seconds,
         "non_llm_reply_delay_max_seconds": settings.non_llm_reply_delay_max_seconds,
     }

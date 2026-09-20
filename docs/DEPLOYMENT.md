@@ -126,4 +126,5 @@ systemd-run --collect --property=Type=oneshot \
 | 主动通知未送达 | 用 `/status` 查看最近错误；检查 `outbound_messages` 中 `status/attempts/last_error`，确认 NapCat 已连接 |
 | 定时任务不运行 | 核对时区与 cron，用 `/status` 确认 Scheduler 运行中及任务数；system cron 修改会即时重排 APScheduler job，无需仅为 cron 变更重启 Bot |
 | 定时任务历史持续增长 | `SCHEDULED_TASK_HISTORY_LIMIT` 控制已禁用/终态任务保留数量；active 任务永不清理，设为 `0` 表示不保留终态历史。对应 `scheduled_content_history` 会随被清理的任务一起删除。 |
+| 会话历史长期留存 | `SESSION_RETENTION_DAYS` 默认 90 天；启动时及之后每小时会清理超过保留期的 inactive session 与对应 messages。设为 `0` 可关闭自动清理。 |
 | 数据库锁定 | 确认只运行一个 Bot 进程；正常停止残留进程后恢复，禁止多个实例共用同一 SQLite 文件 |

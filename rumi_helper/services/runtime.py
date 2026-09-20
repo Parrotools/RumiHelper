@@ -36,6 +36,7 @@ from rumi_helper.services.web.summarizer import WebSummarizer
 from rumi_helper.utils import ReplyGate
 
 _CONFIRMATION_HOUSEKEEPING_INTERVAL_SECONDS = 30.0
+_SESSION_PRUNE_INTERVAL_SECONDS = 3600.0
 
 
 @dataclass
@@ -107,16 +108,33 @@ async def _recover_expired_confirmations(
 async def _confirmation_housekeeping_loop(
     db: Database,
     interval_seconds: float = _CONFIRMATION_HOUSEKEEPING_INTERVAL_SECONDS,
+    *,
+    sessions: SessionManager | None = None,
+    session_retention_days: int = 0,
+    session_prune_interval_seconds: float = _SESSION_PRUNE_INTERVAL_SECONDS,
 ) -> None:
     interval = max(0.01, float(interval_seconds))
+    prune_interval = max(interval, float(session_prune_interval_seconds))
+    next_session_prune = time.monotonic() + prune_interval
     while True:
         try:
             await asyncio.sleep(interval)
             await _recover_expired_confirmations(db)
+            if (
+                sessions is not None
+                and session_retention_days > 0
+                and time.monotonic() >= next_session_prune
+            ):
+                try:
+                    await sessions.prune_inactive(session_retention_days)
+                except Exception:
+                    logging.getLogger(__name__).exception("清理过期会话历史失败")
+                finally:
+                    next_session_prune = time.monotonic() + prune_interval
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.getLogger(__name__).exception("清理过期确认执行状态失败")
+            logging.getLogger(__name__).exception("housekeeping 执行失败")
 
 
 async def _cancel_background_task(task: asyncio.Task | None) -> None:
@@ -253,9 +271,23 @@ async def _init_runtime_unlocked() -> Runtime:
             max_chunks=settings.web_summary_max_chunks,
         )
 
+        sessions = SessionManager(
+            db,
+            settings.max_context_messages,
+            settings.max_context_chars,
+        )
+        try:
+            await sessions.prune_inactive(settings.session_retention_days)
+        except Exception:
+            logging.getLogger(__name__).exception("启动时清理过期会话历史失败")
+
         started_at = time.monotonic()
         housekeeping_task = asyncio.create_task(
-            _confirmation_housekeeping_loop(db),
+            _confirmation_housekeeping_loop(
+                db,
+                sessions=sessions,
+                session_retention_days=settings.session_retention_days,
+            ),
             name="confirmation-housekeeping",
         )
         stack.push_async_callback(_cancel_background_task, housekeeping_task)
@@ -281,11 +313,7 @@ async def _init_runtime_unlocked() -> Runtime:
                 housekeeping_task=housekeeping_task,
             ),
             report=report,
-            sessions=SessionManager(
-                db,
-                settings.max_context_messages,
-                settings.max_context_chars,
-            ),
+            sessions=sessions,
             llm=llm,
             dispatcher=dispatcher,
             permission=permission,
