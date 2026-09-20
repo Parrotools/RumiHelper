@@ -756,3 +756,72 @@ async def test_notification_producers_tag_outbound_source_metadata(db):
             "notification_owner_id": "123",
         },
     ]
+
+async def test_notification_preflight_keeps_lease_heartbeat_alive(tmp_path):
+    path = str(tmp_path / "notification-preflight-lease.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    first_calls = 0
+    second_calls = 0
+
+    original_check = first_db.outbound_notification_enabled
+
+    async def blocked_check(owner_id: str, notification_kind: str) -> bool:
+        entered.set()
+        await release.wait()
+        return await original_check(owner_id, notification_kind)
+
+    async def first_api(action: str, **params) -> dict:
+        nonlocal first_calls
+        first_calls += 1
+        return {"message_id": 701}
+
+    async def second_api(action: str, **params) -> dict:
+        nonlocal second_calls
+        second_calls += 1
+        return {"message_id": 702}
+
+    first_db.outbound_notification_enabled = blocked_check
+    try:
+        await first_db.patch_notification_settings("123", reminder_notify=True)
+        await first_db.execute(
+            "INSERT INTO outbound_messages "
+            "(target_type, target_id, content, max_attempts, next_attempt_at, "
+            "notification_kind, notification_owner_id) "
+            "VALUES ('user', '123', 'reminder', 3, datetime('now'), "
+            "'reminder', '123')",
+            (),
+        )
+        first = MessageDispatcher(
+            first_db,
+            api_caller=first_api,
+            lease_seconds=1.0,
+        )
+        second = MessageDispatcher(
+            second_db,
+            api_caller=second_api,
+            lease_seconds=1.0,
+        )
+
+        running = asyncio.create_task(first.process_outbound_messages(limit=1))
+        await entered.wait()
+        await asyncio.sleep(1.2)
+
+        assert await second.process_outbound_messages(limit=1) == 0
+        assert second_calls == 0
+
+        release.set()
+        assert await running == 1
+        assert first_calls == 1
+        assert await first_db.fetchone(
+            "SELECT status, attempts, message_id FROM outbound_messages",
+            (),
+        ) == {"status": "sent", "attempts": 1, "message_id": "701"}
+    finally:
+        release.set()
+        await first_db.close()
+        await second_db.close()
