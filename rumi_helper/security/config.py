@@ -10,6 +10,20 @@ class SecurityConfigurationError(ValueError):
     """Runtime configuration would expose credentials or an unauthenticated service."""
 
 
+def onebot_token_alias_conflict(settings) -> bool:
+    """Return True when canonical and legacy OneBot token aliases disagree."""
+    canonical = str(settings.onebot_v11_access_token).strip()
+    legacy = str(settings.onebot_access_token).strip()
+    return bool(canonical and legacy and canonical != legacy)
+
+
+def validate_onebot_token_aliases(settings) -> None:
+    if onebot_token_alias_conflict(settings):
+        raise SecurityConfigurationError(
+            "ONEBOT_V11_ACCESS_TOKEN 与 ONEBOT_ACCESS_TOKEN 同时配置但值不一致"
+        )
+
+
 def is_loopback_host(host: str) -> bool:
     value = str(host).strip().lower().strip("[]")
     if value == "localhost":
@@ -24,6 +38,11 @@ def validate_runtime_security(settings) -> None:
     errors: list[str] = []
 
     host = str(settings.host).strip()
+
+    if onebot_token_alias_conflict(settings):
+        errors.append(
+            "ONEBOT_V11_ACCESS_TOKEN 与 ONEBOT_ACCESS_TOKEN 同时配置但值不一致"
+        )
 
     admin_ids = settings.admin_ids
     if any(not is_ascii_decimal_id(value) for value in admin_ids):

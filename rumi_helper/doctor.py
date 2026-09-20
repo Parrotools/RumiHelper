@@ -20,7 +20,10 @@ from rumi_helper.config import Settings
 from rumi_helper.config_validation import numeric_limit_error
 from rumi_helper.personality.manager import PersonalityConfigError, PersonalityManager
 from rumi_helper.promptlib import load_prompt
-from rumi_helper.security.config import is_loopback_host
+from rumi_helper.security.config import (
+    is_loopback_host,
+    onebot_token_alias_conflict,
+)
 from rumi_helper.security.identifiers import is_ascii_decimal_id
 
 CheckStatus = Literal["PASS", "WARN", "FAIL"]
@@ -120,6 +123,15 @@ def _check_llm_model(settings: Settings) -> DoctorCheck:
 
 def _check_credentials(settings: Settings) -> list[DoctorCheck]:
     checks = [
+        DoctorCheck(
+            "onebot_token_alias",
+            "FAIL" if onebot_token_alias_conflict(settings) else "PASS",
+            (
+                "canonical 与 legacy token 同时配置但值不一致"
+                if onebot_token_alias_conflict(settings)
+                else "兼容别名无冲突"
+            ),
+        ),
         DoctorCheck(
             "onebot_token",
             "PASS" if settings.onebot_token else "WARN",

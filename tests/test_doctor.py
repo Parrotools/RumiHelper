@@ -327,3 +327,34 @@ def test_doctor_rejects_blank_llm_model(tmp_path):
     statuses = _statuses(run_checks(_settings(tmp_path, llm_model="   ")))
 
     assert statuses["llm_model"] == "FAIL"
+
+
+def test_doctor_rejects_conflicting_onebot_token_aliases_without_echoing_values(tmp_path):
+    canonical = "canonical-secret-do-not-print"
+    legacy = "legacy-secret-do-not-print"
+    checks = run_checks(
+        _settings(
+            tmp_path,
+            onebot_v11_access_token=canonical,
+            onebot_access_token=legacy,
+        )
+    )
+    alias = next(check for check in checks if check.name == "onebot_token_alias")
+
+    assert alias.status == "FAIL"
+    assert canonical not in alias.detail
+    assert legacy not in alias.detail
+
+
+def test_doctor_allows_matching_onebot_token_aliases(tmp_path):
+    statuses = _statuses(
+        run_checks(
+            _settings(
+                tmp_path,
+                onebot_v11_access_token="same-secret",
+                onebot_access_token="same-secret",
+            )
+        )
+    )
+
+    assert statuses["onebot_token_alias"] == "PASS"

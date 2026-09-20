@@ -101,3 +101,27 @@ def test_onebot_token_falls_back_to_legacy_project_setting():
         onebot_access_token="legacy",
     )
     assert settings.onebot_token == "legacy"
+
+
+def test_runtime_security_rejects_conflicting_onebot_token_aliases():
+    settings = Settings(
+        _env_file=None,
+        onebot_v11_access_token="canonical-secret",
+        onebot_access_token="legacy-secret",
+    )
+
+    with pytest.raises(SecurityConfigurationError, match="值不一致") as exc_info:
+        validate_runtime_security(settings)
+
+    assert "canonical-secret" not in str(exc_info.value)
+    assert "legacy-secret" not in str(exc_info.value)
+
+
+def test_runtime_security_allows_matching_onebot_token_aliases():
+    settings = Settings(
+        _env_file=None,
+        onebot_v11_access_token="same-secret",
+        onebot_access_token="same-secret",
+    )
+
+    validate_runtime_security(settings)

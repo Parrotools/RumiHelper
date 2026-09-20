@@ -48,13 +48,40 @@ def test_legacy_onebot_token_is_bridged_to_adapter_canonical_key(tmp_path):
     )
 
 
-def test_canonical_onebot_token_takes_precedence(tmp_path):
+def test_matching_canonical_and_legacy_onebot_tokens_are_accepted(tmp_path):
     _probe_adapter_token(
         tmp_path,
-        legacy="legacy-test-token",
-        canonical="canonical-test-token",
-        expected="canonical-test-token",
+        legacy="same-test-token",
+        canonical="same-test-token",
+        expected="same-test-token",
     )
+
+
+def test_conflicting_onebot_token_aliases_fail_before_adapter_init(tmp_path):
+    canonical = "canonical-secret-do-not-print"
+    legacy = "legacy-secret-do-not-print"
+    env = os.environ.copy()
+    env.pop("ONEBOT_ACCESS_TOKEN", None)
+    env.pop("ONEBOT_V11_ACCESS_TOKEN", None)
+    env["DRIVER"] = "~fastapi"
+    env["ONEBOT_ACCESS_TOKEN"] = legacy
+    env["ONEBOT_V11_ACCESS_TOKEN"] = canonical
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import rumi_helper.cli"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "值不一致" in output
+    assert canonical not in output
+    assert legacy not in output
 
 
 def test_legacy_dotenv_token_is_bridged_for_existing_deployments(tmp_path):

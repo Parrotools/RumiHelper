@@ -13,8 +13,11 @@ from fastapi.responses import JSONResponse
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
 from rumi_helper.config import Settings
+from rumi_helper.security.config import validate_onebot_token_aliases
 
-_ONEBOT_ACCESS_TOKEN = Settings().onebot_token
+_settings = Settings()
+validate_onebot_token_aliases(_settings)
+_ONEBOT_ACCESS_TOKEN = _settings.onebot_token
 
 
 def _bridge_onebot_access_token() -> None:
