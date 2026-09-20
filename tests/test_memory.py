@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -188,3 +189,29 @@ async def test_memory_retention_is_bounded_per_user(db):
         {"user_id": "user-1", "content": "memory-4"},
         {"user_id": "user-2", "content": "other-user"},
     ]
+
+
+async def test_memory_retention_limit_holds_across_connections(tmp_path):
+    path = str(tmp_path / "memory-limit-race.db")
+    first = Database(path)
+    second = Database(path)
+    await first.connect()
+    await second.connect()
+    try:
+        first_service = MemoryService(first, max_memories_per_user=1)
+        second_service = MemoryService(second, max_memories_per_user=1)
+
+        await asyncio.gather(
+            first_service.save("user-1", "fact", "first", importance=0.9),
+            second_service.save("user-1", "fact", "second", importance=0.9),
+        )
+
+        rows = await first.fetchall(
+            "SELECT user_id, content FROM memories WHERE user_id = ? ORDER BY id",
+            ("user-1",),
+        )
+        assert len(rows) == 1
+        assert rows[0]["content"] in {"first", "second"}
+    finally:
+        await first.close()
+        await second.close()
