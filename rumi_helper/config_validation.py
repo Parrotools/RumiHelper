@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -43,6 +44,7 @@ def numeric_limit_error(settings: Any) -> str | None:
         ),
     }
     nonnegative = {
+        "llm_temperature": settings.llm_temperature,
         "web_cache_ttl_seconds": settings.web_cache_ttl_seconds,
         "outbound_terminal_history_limit": settings.outbound_terminal_history_limit,
         "send_log_history_limit": settings.send_log_history_limit,
@@ -55,6 +57,14 @@ def numeric_limit_error(settings: Any) -> str | None:
         nonnegative["non_llm_reply_delay_seconds"] = (
             settings.non_llm_reply_delay_seconds
         )
+
+    nonfinite = sorted(
+        name
+        for name, value in {**positive, **nonnegative}.items()
+        if not math.isfinite(float(value))
+    )
+    if nonfinite:
+        return f"必须是有限数值：{', '.join(nonfinite)}"
 
     invalid_positive = sorted(
         name for name, value in positive.items() if float(value) <= 0

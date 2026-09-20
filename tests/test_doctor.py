@@ -289,6 +289,27 @@ def test_doctor_allows_documented_zero_disable_values(tmp_path):
     assert statuses["numeric_limits"] == "PASS"
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("llm_timeout", float("nan")),
+        ("send_rate_limit_per_second", float("inf")),
+        ("web_cache_ttl_seconds", float("-inf")),
+        ("llm_temperature", float("nan")),
+    ],
+)
+def test_doctor_rejects_nonfinite_numeric_limits(tmp_path, field, value):
+    statuses = _statuses(run_checks(_settings(tmp_path, **{field: value})))
+    assert statuses["numeric_limits"] == "FAIL"
+
+
+def test_doctor_rejects_negative_llm_temperature(tmp_path):
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, llm_temperature=-0.1))
+    )
+    assert statuses["numeric_limits"] == "FAIL"
+
+
 def test_doctor_rejects_inverted_non_llm_reply_delay_range(tmp_path):
     statuses = _statuses(
         run_checks(
