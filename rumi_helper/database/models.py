@@ -305,6 +305,14 @@ ON github_repositories(
 );
 """
 
+MESSAGE_EVENT_DEDUP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS processed_message_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    dedup_key  TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -339,4 +347,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (14, MESSAGE_ROLE_SANITIZATION_SCHEMA),
     (15, GITHUB_REPOSITORY_NOCASE_SCHEMA),
     (16, OUTBOUND_NOTIFICATION_SOURCE_SCHEMA),
+    (17, MESSAGE_EVENT_DEDUP_SCHEMA),
 )

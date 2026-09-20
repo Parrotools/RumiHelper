@@ -16,6 +16,7 @@ from rumi_helper.database.models import MIGRATIONS
 from rumi_helper.database.repositories.agent_actions import AgentActionRepository
 from rumi_helper.database.repositories.github import GitHubRepository
 from rumi_helper.database.repositories.memory import MemoryRepository
+from rumi_helper.database.repositories.message_events import MessageEventRepository
 from rumi_helper.database.repositories.outbound import OutboundRepository
 from rumi_helper.database.repositories.pending_broadcasts import PendingBroadcastRepository
 from rumi_helper.database.repositories.reports import ReportRepository
@@ -45,6 +46,7 @@ def _split_sql_statements(script: str) -> list[str]:
 class Database(
     OutboundRepository,
     MemoryRepository,
+    MessageEventRepository,
     SchedulerRepository,
     AgentActionRepository,
     SettingsRepository,

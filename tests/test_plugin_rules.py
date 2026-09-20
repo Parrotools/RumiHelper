@@ -501,3 +501,29 @@ async def test_github_list_in_group_refuses_private_configuration(monkeypatch):
     assert sent == [
         "为了隐私，GitHub 监控配置只能在私聊中查看或修改。"
     ]
+
+
+async def test_chat_dedup_survives_in_memory_reset_via_database(tmp_path, monkeypatch):
+    from rumi_helper.database.db import Database
+    from rumi_helper.plugins import ai_chat, chat_message_utils
+
+    db = Database(str(tmp_path / "event-trigger-dedup.db"))
+    await db.connect()
+    try:
+        monkeypatch.setattr(
+            ai_chat,
+            "get_runtime",
+            lambda: SimpleNamespace(db=db),
+        )
+        event = _private_event("跨进程去重", user=29999, mid=990001)
+
+        chat_message_utils._DEDUP.clear()
+        assert await ai_chat._trigger(event) is True
+
+        # Simulate a fresh process: its in-memory LRU has no record, while the
+        # shared SQLite claim must still reject the replay.
+        chat_message_utils._DEDUP.clear()
+        assert await ai_chat._trigger(event) is False
+    finally:
+        chat_message_utils._DEDUP.clear()
+        await db.close()
