@@ -90,7 +90,17 @@ class PendingBroadcastRepository:
                 await self._prune_terminal_broadcasts_unlocked()
                 await self.conn.commit()
                 return None
-            row["targets"] = json.loads(row["targets_json"])
+            try:
+                row["targets"] = json.loads(row["targets_json"])
+            except (json.JSONDecodeError, TypeError):
+                await self.conn.execute(
+                    "UPDATE pending_broadcasts "
+                    "SET status = ?, targets_json = '[]', content = '' "
+                    "WHERE id = ? AND status = ?",
+                    (_PENDING_FAILED, row["id"], _PENDING_ACTIVE),
+                )
+                await self.conn.commit()
+                return None
             return row
 
     async def claim_pending(self, pending_id: int) -> bool:

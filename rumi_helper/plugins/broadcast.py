@@ -26,6 +26,37 @@ _CONFIRM = "/confirm"
 _CANCEL = "/cancel"
 
 
+def _validate_pending_broadcast(
+    pending: dict,
+    *,
+    max_recipients: int,
+):
+    stored_targets = pending.get("targets")
+    content = pending.get("content")
+    if not isinstance(stored_targets, list) or not isinstance(content, str):
+        raise BroadcastFormatError("待确认任务数据格式无效")
+
+    target_parts: list[str] = []
+    for item in stored_targets:
+        if not isinstance(item, dict):
+            raise BroadcastFormatError("待确认任务目标格式无效")
+        target_type = item.get("type")
+        target_id = item.get("id")
+        if not isinstance(target_type, str) or not isinstance(target_id, str):
+            raise BroadcastFormatError("待确认任务目标格式无效")
+        target_parts.append(f"{target_type}:{target_id}")
+
+    targets, message = parse_broadcast_command(
+        f"{_BROADCAST} {','.join(target_parts)} -- {content}"
+    )
+    limit = max(1, int(max_recipients))
+    if len(targets) > limit:
+        raise BroadcastFormatError(
+            f"目标数量 {len(targets)} 超过当前上限 {limit}"
+        )
+    return targets, message
+
+
 async def _broadcast_rule(event: MessageEvent) -> bool:
     if str(event.user_id) == str(event.self_id):
         return False
@@ -125,19 +156,24 @@ async def _handle_confirm(event: MessageEvent):
         await send_local_reply(confirm_matcher, runtime, "该任务已被处理。")
         return
 
-    from rumi_helper.services.qq.broadcast_parser import parse_targets
-
     try:
-        targets = parse_targets(",".join(f"{t['type']}:{t['id']}" for t in pending["targets"]))
+        targets, message = _validate_pending_broadcast(
+            pending,
+            max_recipients=runtime.settings.max_broadcast_recipients,
+        )
     except BroadcastFormatError:
         await runtime.db.finish_pending(pending["id"], "failed")
-        logger.error("pending_broadcast %s 目标数据损坏", pending["id"])
-        await send_local_reply(confirm_matcher, runtime, "任务数据异常，已放弃发送。")
+        logger.error("pending_broadcast %s 数据损坏或不符合当前限制", pending["id"])
+        await send_local_reply(
+            confirm_matcher,
+            runtime,
+            "任务数据异常或已不符合当前限制，已放弃发送。",
+        )
         return
 
     logger.info("broadcast 执行 pending_id=%s admin=%s targets=%d", pending["id"], sender_id, len(targets))
     try:
-        report = await runtime.dispatcher.broadcast(targets, pending["content"])
+        report = await runtime.dispatcher.broadcast(targets, message)
     except Exception:  # noqa: BLE001 - execution failure must transition the durable state
         await runtime.db.finish_pending(pending["id"], "failed")
         logger.exception("broadcast 执行失败 pending_id=%s admin=%s", pending["id"], sender_id)

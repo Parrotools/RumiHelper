@@ -215,3 +215,107 @@ async def test_terminal_broadcast_history_is_bounded(db, monkeypatch):
             "content": "still active",
         },
     ]
+
+
+async def test_corrupt_pending_target_json_is_failed_and_redacted(db):
+    pending_id = await db.create_pending_broadcast(
+        "admin1",
+        [{"type": "user", "id": "123"}],
+        "secret body",
+        ttl_seconds=300,
+    )
+    await db.execute(
+        "UPDATE pending_broadcasts SET targets_json = ? WHERE id = ?",
+        ("{not-json", pending_id),
+    )
+
+    assert await db.get_active_pending("admin1") is None
+    assert await db.fetchone(
+        "SELECT status, targets_json, content FROM pending_broadcasts WHERE id = ?",
+        (pending_id,),
+    ) == {
+        "status": "failed",
+        "targets_json": "[]",
+        "content": "",
+    }
+
+
+@pytest.mark.parametrize(
+    ("targets", "content", "limit"),
+    [
+        (
+            [
+                {"type": "user", "id": "101"},
+                {"type": "user", "id": "102"},
+                {"type": "user", "id": "103"},
+            ],
+            "hello",
+            2,
+        ),
+        ([{"type": "user"}], "hello", 20),
+        ([{"type": "user", "id": "101"}], "x" * 4001, 20),
+    ],
+)
+async def test_confirm_revalidates_persisted_broadcast_payload(
+    db,
+    monkeypatch,
+    targets,
+    content,
+    limit,
+):
+    from types import SimpleNamespace
+
+    from rumi_helper.plugins import broadcast as broadcast_plugin
+
+    pending_id = await db.create_pending_broadcast(
+        "admin1",
+        [{"type": "user", "id": "999"}],
+        "original",
+        ttl_seconds=300,
+    )
+    await db.execute(
+        "UPDATE pending_broadcasts SET targets_json = ?, content = ? WHERE id = ?",
+        (
+            __import__("json").dumps(targets, ensure_ascii=False),
+            content,
+            pending_id,
+        ),
+    )
+
+    dispatcher_calls = []
+    replies = []
+
+    class FailIfCalledDispatcher:
+        async def broadcast(self, targets, message):
+            dispatcher_calls.append((targets, message))
+            raise AssertionError("invalid persisted broadcast must not be sent")
+
+    runtime = SimpleNamespace(
+        db=db,
+        permission=SimpleNamespace(is_admin=lambda _user_id: True),
+        settings=SimpleNamespace(max_broadcast_recipients=limit),
+        dispatcher=FailIfCalledDispatcher(),
+    )
+
+    async def fake_send_local_reply(_matcher, _runtime, message):
+        replies.append(message)
+
+    monkeypatch.setattr(broadcast_plugin, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        broadcast_plugin,
+        "send_local_reply",
+        fake_send_local_reply,
+    )
+
+    await broadcast_plugin._handle_confirm(SimpleNamespace(user_id="admin1"))
+
+    assert dispatcher_calls == []
+    assert replies == ["任务数据异常或已不符合当前限制，已放弃发送。"]
+    assert await db.fetchone(
+        "SELECT status, targets_json, content FROM pending_broadcasts WHERE id = ?",
+        (pending_id,),
+    ) == {
+        "status": "failed",
+        "targets_json": "[]",
+        "content": "",
+    }
