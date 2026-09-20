@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from rumi_helper.database.db import Database
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.services.qq.broadcast_parser import BroadcastTarget
 from rumi_helper.utils import truncate_for_qq
 
@@ -351,14 +352,17 @@ class MessageDispatcher:
         notification_kind: str | None = None,
     ) -> SendResult:
         message = truncate_for_qq(str(message))
-        try:
-            numeric_id = int(target_id)
-        except ValueError:
+        if target_type not in {"user", "group"} or not is_ascii_decimal_id(target_id):
             result = SendResult(target_type, target_id, False, error="InvalidTarget")
-            logger.warning("发送失败 type=%s id=%s error=InvalidTarget", target_type, target_id)
+            logger.warning(
+                "发送失败 type=%s id=%s error=InvalidTarget",
+                target_type,
+                target_id,
+            )
             await self._log(result, message)
             return result
 
+        numeric_id = int(target_id)
         action = "send_private_msg" if target_type == "user" else "send_group_msg"
         params: dict = {
             "message": message,

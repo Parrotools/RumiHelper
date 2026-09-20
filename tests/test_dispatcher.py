@@ -29,6 +29,52 @@ def _fake_caller(fail_targets: set[str]):
     return caller
 
 
+@pytest.mark.parametrize(
+    ("target_type", "target_id"),
+    [
+        ("channel", "123"),
+        ("user", "-1"),
+        ("group", "１２３"),
+        ("user", ""),
+    ],
+)
+async def test_send_rejects_invalid_target_before_onebot_call(
+    db,
+    target_type,
+    target_id,
+):
+    calls = 0
+
+    async def caller(action: str, **params) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"message_id": "unexpected"}
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+
+    result = await dispatcher._send(target_type, target_id, "hello")
+
+    assert result.success is False
+    assert result.error == "InvalidTarget"
+    assert calls == 0
+    logs = await db.fetchall(
+        "SELECT target_type, target_id, success, error FROM send_logs",
+        (),
+    )
+    assert logs == [
+        {
+            "target_type": target_type,
+            "target_id": target_id,
+            "success": 0,
+            "error": "InvalidTarget",
+        }
+    ]
+
+
 async def test_send_user_success_logs(db):
     d = MessageDispatcher(db, rate_limit_per_second=0, api_caller=_fake_caller(set()))
     r = await d.send_user("123", "hello")
