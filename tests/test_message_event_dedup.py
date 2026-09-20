@@ -49,6 +49,11 @@ async def test_message_event_history_is_bounded(tmp_path, monkeypatch):
         "_MESSAGE_EVENT_HISTORY_LIMIT",
         2,
     )
+    monkeypatch.setattr(
+        message_events_repository,
+        "_MESSAGE_EVENT_PRUNE_INTERVAL",
+        1,
+    )
     db = Database(str(tmp_path / "event-history.db"))
     await db.connect()
     try:
@@ -77,5 +82,39 @@ async def test_empty_message_event_key_is_rejected(tmp_path):
             "SELECT COUNT(*) AS count FROM processed_message_events",
             (),
         ) == {"count": 0}
+    finally:
+        await db.close()
+
+
+async def test_message_event_history_prunes_in_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        message_events_repository,
+        "_MESSAGE_EVENT_HISTORY_LIMIT",
+        2,
+    )
+    monkeypatch.setattr(
+        message_events_repository,
+        "_MESSAGE_EVENT_PRUNE_INTERVAL",
+        4,
+    )
+    db = Database(str(tmp_path / "event-batch-prune.db"))
+    await db.connect()
+    try:
+        for index in range(3):
+            assert await db.claim_message_event(f"batched-{index}") is True
+
+        assert await db.fetchone(
+            "SELECT COUNT(*) AS count FROM processed_message_events",
+            (),
+        ) == {"count": 3}
+
+        assert await db.claim_message_event("batched-3") is True
+        assert await db.fetchall(
+            "SELECT dedup_key FROM processed_message_events ORDER BY id",
+            (),
+        ) == [
+            {"dedup_key": "batched-2"},
+            {"dedup_key": "batched-3"},
+        ]
     finally:
         await db.close()

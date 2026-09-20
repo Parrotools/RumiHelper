@@ -1,6 +1,7 @@
 """Durable deduplication for inbound OneBot message events."""
 
 _MESSAGE_EVENT_HISTORY_LIMIT = 100_000
+_MESSAGE_EVENT_PRUNE_INTERVAL = 256
 
 
 class MessageEventRepository:
@@ -16,15 +17,17 @@ class MessageEventRepository:
                     (key,),
                 ) as cursor:
                     claimed = cursor.rowcount == 1
+                    inserted_id = int(cursor.lastrowid or 0)
 
-                if claimed:
+                prune_interval = max(1, int(_MESSAGE_EVENT_PRUNE_INTERVAL))
+                if claimed and inserted_id % prune_interval == 0:
                     limit = max(1, int(_MESSAGE_EVENT_HISTORY_LIMIT))
                     await self.conn.execute(
                         "DELETE FROM processed_message_events "
-                        "WHERE id NOT IN ("
+                        "WHERE id <= COALESCE(("
                         "  SELECT id FROM processed_message_events "
-                        "  ORDER BY id DESC LIMIT ?"
-                        ")",
+                        "  ORDER BY id DESC LIMIT 1 OFFSET ?"
+                        "), -1)",
                         (limit,),
                     )
                 await self.conn.commit()
