@@ -15,7 +15,6 @@ from rumi_helper.database.db import Database
 from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.services import scheduler_parsing as _parsing
 from rumi_helper.services.llm.base import LLMProvider
-from rumi_helper.services.notifications import NotificationSettingsService
 from rumi_helper.services.qq.dispatcher import MessageDispatcher
 from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT, truncate_for_qq
 
@@ -23,9 +22,6 @@ logger = logging.getLogger(__name__)
 
 TaskHandler = Callable[[dict], Awaitable[None]]
 MISFIRE_GRACE_SECONDS = 60
-NOTIFICATION_BY_TASK = {
-    "reminder": "reminder_notify",
-}
 GROUP_MESSAGE_TASK_TYPE = "group_message"
 TOPIC_JOKE_TASK_TYPE = "topic_joke"
 _ADMIN_TASK_TYPES = frozenset({GROUP_MESSAGE_TASK_TYPE, TOPIC_JOKE_TASK_TYPE})
@@ -58,7 +54,6 @@ class SchedulerService:
         self._db = db
         self._dispatcher = dispatcher
         self._llm = llm
-        self._notifications = NotificationSettingsService(db)
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._started = False
         self._shutdown_timeout_seconds = max(0.1, float(shutdown_timeout_seconds))
@@ -356,19 +351,9 @@ class SchedulerService:
 
             try:
                 payload = json.loads(task["payload"])
-                notification_field = NOTIFICATION_BY_TASK.get(task["task_type"])
-                if notification_field:
-                    settings = await self._notifications.get(task["owner_id"])
-                    if not settings[notification_field]:
-                        logger.info("通知已关闭，跳过任务 task_id=%s type=%s", task_id, task["task_type"])
-                    else:
-                        await self._handlers[task["task_type"]](
-                            {**task, "payload": payload}
-                        )
-                else:
-                    await self._handlers[task["task_type"]](
-                        {**task, "payload": payload}
-                    )
+                await self._handlers[task["task_type"]](
+                    {**task, "payload": payload}
+                )
             except Exception:
                 logger.exception("定时任务执行失败 task_id=%s type=%s", task_id, task["task_type"])
         finally:
@@ -469,7 +454,19 @@ class SchedulerService:
         payload = task["payload"]
         if payload.get("target_type") != "user" or str(payload.get("target_id")) != str(task["owner_id"]):
             raise SchedulerValidationError("提醒只能发送给任务创建者本人")
-        await self._dispatcher.enqueue_user(task["owner_id"], str(payload["message"]))
+        queued = await self._db.enqueue_reminder_if_enabled(
+            str(task["owner_id"]),
+            str(payload["message"]),
+            self._outbound_max_attempts,
+        )
+        if queued:
+            self._dispatcher.notify_queue_changed()
+        else:
+            logger.info(
+                "提醒通知已关闭，跳过任务 task_id=%s owner=%s",
+                task["id"],
+                task["owner_id"],
+            )
 
     async def _handle_group_message(self, task: dict) -> None:
         payload = task["payload"]

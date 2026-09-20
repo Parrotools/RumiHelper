@@ -78,6 +78,38 @@ class SchedulerRepository:
                 raise RuntimeError("系统定时任务创建失败")
             return int(row["id"])
 
+    async def enqueue_reminder_if_enabled(
+        self,
+        owner_id: str,
+        content: str,
+        max_attempts: int,
+    ) -> bool:
+        """Queue a reminder only if the user's notification flag is still enabled."""
+        async with self.operation():
+            try:
+                async with self.conn.execute(
+                    "INSERT INTO outbound_messages "
+                    "(target_type, target_id, content, max_attempts, next_attempt_at) "
+                    "SELECT 'user', ?, ?, ?, ? "
+                    "WHERE EXISTS ("
+                    "  SELECT 1 FROM notification_settings "
+                    "  WHERE user_id = ? AND reminder_notify = 1"
+                    ")",
+                    (
+                        str(owner_id),
+                        _outbound_content(content),
+                        max(1, int(max_attempts)),
+                        _now(),
+                        str(owner_id),
+                    ),
+                ) as cursor:
+                    queued = cursor.rowcount == 1
+                await self.conn.commit()
+                return queued
+            except Exception:
+                await self.conn.rollback()
+                raise
+
     async def fetch_enabled_scheduled_tasks(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id")
 

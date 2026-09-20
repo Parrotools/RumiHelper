@@ -145,7 +145,17 @@ async def test_create_and_run_one_time_reminder(db):
     )
     await scheduler.run_task(task_id)
 
-    assert dispatcher.enqueued == [("user", "user-1", "记得提交周报")]
+    assert dispatcher.enqueued == []
+    assert dispatcher.wake_calls == 1
+    assert await db.fetchone(
+        "SELECT target_type, target_id, content, status FROM outbound_messages",
+        (),
+    ) == {
+        "target_type": "user",
+        "target_id": "user-1",
+        "content": "记得提交周报",
+        "status": "pending",
+    }
     row = await db.fetchone("SELECT enabled, last_run FROM scheduled_tasks WHERE id = ?", (task_id,))
     assert row["enabled"] == 0
     assert row["last_run"] is not None
@@ -290,6 +300,12 @@ async def test_reminder_does_not_send_when_notifications_are_off(db):
     await scheduler.run_task(task_id)
 
     assert dispatcher.calls == []
+    assert dispatcher.enqueued == []
+    assert dispatcher.wake_calls == 0
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
 
 
 async def test_scheduler_starts_and_registers_persisted_task(db):
@@ -1202,3 +1218,36 @@ async def test_scheduler_rejects_non_ascii_numeric_group_id(db, group_id):
             "hello",
             run_at=datetime.now(UTC) + timedelta(hours=1),
         )
+
+
+async def test_reminder_enqueue_observes_latest_notification_state_across_connections(tmp_path):
+    path = str(tmp_path / "reminder-notify-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    try:
+        settings = NotificationSettingsService(first_db)
+
+        await settings.set("user-1", reminder_notify=True)
+        assert await second_db.enqueue_reminder_if_enabled(
+            "user-1",
+            "enabled",
+            3,
+        ) is True
+
+        await settings.set("user-1", reminder_notify=False)
+        assert await second_db.enqueue_reminder_if_enabled(
+            "user-1",
+            "disabled",
+            3,
+        ) is False
+
+        rows = await first_db.fetchall(
+            "SELECT content FROM outbound_messages ORDER BY id",
+            (),
+        )
+        assert rows == [{"content": "enabled"}]
+    finally:
+        await first_db.close()
+        await second_db.close()
