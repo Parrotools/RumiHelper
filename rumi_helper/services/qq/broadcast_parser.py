@@ -32,6 +32,7 @@ class BroadcastTarget:
 
 def parse_targets(raw: str) -> list[BroadcastTarget]:
     targets: list[BroadcastTarget] = []
+    seen: set[tuple[str, str]] = set()
     for part in raw.split(","):
         part = part.strip()
         if not part:
@@ -43,6 +44,10 @@ def parse_targets(raw: str) -> list[BroadcastTarget]:
             raise BroadcastFormatError(f"无效目标「{part}」，应为 user:QQ号 或 group:群号")
         if not is_ascii_decimal_id(target_id):
             raise BroadcastFormatError(f"无效的 QQ/群号「{target_id}」")
+        key = (type_, target_id)
+        if key in seen:
+            continue
+        seen.add(key)
         targets.append(BroadcastTarget(type_, target_id))
     if not targets:
         raise BroadcastFormatError("至少需要一个发送目标")

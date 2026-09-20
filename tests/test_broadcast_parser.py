@@ -39,6 +39,18 @@ def test_invalid_target_id():
         parse_targets("user:abc")
 
 
+def test_duplicate_targets_are_deduplicated_preserving_order():
+    targets = parse_targets(
+        "user:123,user:123,group:456,user:123,group:456,user:789"
+    )
+
+    assert [(target.type, target.id) for target in targets] == [
+        ("user", "123"),
+        ("group", "456"),
+        ("user", "789"),
+    ]
+
+
 def test_empty_targets():
     with pytest.raises(BroadcastFormatError):
         parse_targets("  ")
