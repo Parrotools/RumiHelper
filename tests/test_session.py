@@ -331,3 +331,38 @@ async def test_zero_session_retention_disables_cleanup(db):
         "SELECT session_key FROM sessions WHERE session_key = ?",
         (key,),
     ) == {"session_key": key}
+
+async def test_active_turn_refreshes_stale_session_before_retention_prune(db):
+    sessions = SessionManager(db, max_context_messages=10)
+    key = SessionManager.private_key("reactivated")
+    await sessions.append_turn(key, "old question", "old answer")
+    await db.execute(
+        "UPDATE sessions SET updated_at = ? WHERE session_key = ?",
+        ("2000-01-01 00:00:00", key),
+    )
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def active_turn():
+        async with sessions.turn(key):
+            entered.set()
+            await release.wait()
+
+    running = asyncio.create_task(active_turn())
+    await entered.wait()
+
+    deleted = await sessions.prune_inactive(
+        90,
+        now=datetime.now(UTC),
+    )
+
+    assert deleted == 0
+    assert await db.fetchone(
+        "SELECT session_key FROM sessions WHERE session_key = ?",
+        (key,),
+    ) == {"session_key": key}
+    assert len(await sessions.get_context(key)) == 2
+
+    release.set()
+    await running

@@ -37,6 +37,14 @@ class SessionManager:
         """Serialize one complete conversational turn per session."""
         lock = self._turn_locks.setdefault(session_key, asyncio.Lock())
         async with lock:
+            # Protect an old-but-now-active session from retention pruning while
+            # this turn is still waiting on the LLM/tool path and has not yet
+            # persisted its new user/assistant pair.
+            await self._db.execute(
+                "UPDATE sessions SET updated_at = datetime('now') "
+                "WHERE session_key = ?",
+                (session_key,),
+            )
             yield
 
     @staticmethod
