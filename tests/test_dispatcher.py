@@ -35,6 +35,8 @@ def _fake_caller(fail_targets: set[str]):
         ("channel", "123"),
         ("user", "-1"),
         ("group", "１２３"),
+        ("user", "0"),
+        ("group", "000"),
         ("user", ""),
     ],
 )
@@ -132,7 +134,7 @@ async def test_broadcast_continues_on_failure(db):
 
 async def test_broadcast_rate_limit(db):
     d = MessageDispatcher(db, rate_limit_per_second=50, api_caller=_fake_caller(set()))
-    targets = [BroadcastTarget("user", str(i)) for i in range(4)]
+    targets = [BroadcastTarget("user", str(i)) for i in range(1, 5)]
     start = time.monotonic()
     await d.broadcast(targets, "msg")
     elapsed = time.monotonic() - start
