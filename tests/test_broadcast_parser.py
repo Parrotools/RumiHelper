@@ -49,3 +49,9 @@ def test_rejects_oversized_message():
         parse_broadcast_command(
             "/broadcast user:123 -- " + ("x" * 4001)
         )
+
+
+@pytest.mark.parametrize("target", ["user:²", "user:１２３", "group:①"])
+def test_rejects_non_ascii_numeric_target_ids(target):
+    with pytest.raises(BroadcastFormatError):
+        parse_targets(target)

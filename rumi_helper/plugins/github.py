@@ -9,6 +9,7 @@ from rumi_helper.plugins.chat_message_utils import (
     command_is_addressed,
     strip_bot_mention,
 )
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.security.permissions import notification_target_requires_admin
 from rumi_helper.services.github.client import GitHubAPIError
 from rumi_helper.services.github.tracker import GitHubTrackerError, format_check_result, parse_repo_url
@@ -130,7 +131,11 @@ async def _handle_github(event: MessageEvent):
                 raise GitHubTrackerError(_HELP)
             sender_id = str(event.user_id)
             target_type, separator, target_id = args[1].partition(":")
-            if not separator or target_type not in {"user", "group"} or not target_id.isdigit():
+            if (
+                not separator
+                or target_type not in {"user", "group"}
+                or not is_ascii_decimal_id(target_id)
+            ):
                 raise GitHubTrackerError("通知目标应为 user:QQ号 或 group:群号")
             if (
                 notification_target_requires_admin(sender_id, target_type, target_id)

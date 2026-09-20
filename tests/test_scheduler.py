@@ -1176,3 +1176,29 @@ async def test_topic_joke_bounds_provider_output_before_history_and_outbound(db)
     assert outbound is not None
     assert len(outbound["content"]) <= QQ_TEXT_SAFE_LIMIT
     assert outbound["content"] == history[0]
+
+
+@pytest.mark.parametrize("group_id", ["²", "１２３", "①"])
+def test_parse_group_schedule_rejects_non_ascii_numeric_group_id(group_id):
+    with pytest.raises(SchedulerValidationError):
+        parse_group_schedule_command(
+            f"/schedule group:{group_id} 2030-01-02 08:30 -- hello"
+        )
+
+
+@pytest.mark.parametrize("group_id", ["²", "１２３", "①"])
+async def test_scheduler_rejects_non_ascii_numeric_group_id(db, group_id):
+    scheduler = SchedulerService(
+        db,
+        FakeDispatcher(),
+        timezone_name="UTC",
+        is_admin=lambda _user_id: True,
+    )
+
+    with pytest.raises(SchedulerValidationError):
+        await scheduler.create_group_message(
+            "admin-1",
+            group_id,
+            "hello",
+            run_at=datetime.now(UTC) + timedelta(hours=1),
+        )

@@ -6,6 +6,7 @@
 
 from dataclasses import dataclass
 
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
 
 COMMAND_PREFIX = "/broadcast"
@@ -40,7 +41,7 @@ def parse_targets(raw: str) -> list[BroadcastTarget]:
         target_id = target_id.strip()
         if not sep or type_ not in VALID_TARGET_TYPES:
             raise BroadcastFormatError(f"无效目标「{part}」，应为 user:QQ号 或 group:群号")
-        if not target_id.isdigit():
+        if not is_ascii_decimal_id(target_id):
             raise BroadcastFormatError(f"无效的 QQ/群号「{target_id}」")
         targets.append(BroadcastTarget(type_, target_id))
     if not targets:

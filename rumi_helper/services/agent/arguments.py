@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.security.permissions import (
     notification_target_requires_admin,
     shared_session_clear_requires_admin,
@@ -101,7 +102,7 @@ def normalize_arguments(
         group_id = str(arguments["group_id"]).strip()
         content = str(arguments[text_key]).strip()
         timing = str(arguments["timing"]).strip()
-        if not group_id.isdigit() or not content:
+        if not is_ascii_decimal_id(group_id) or not content:
             raise AgentArgumentError("群号必须是数字，内容不能为空")
         _validate_timing(timing, content, runtime)
         return {"group_id": group_id, "timing": timing, text_key: content}
@@ -213,7 +214,11 @@ def _normalize_repo(
 def _normalize_target(value: Any) -> str:
     target = str(value or "").strip()
     target_type, separator, target_id = target.partition(":")
-    if not separator or target_type.lower() not in {"user", "group"} or not target_id.isdigit():
+    if (
+        not separator
+        or target_type.lower() not in {"user", "group"}
+        or not is_ascii_decimal_id(target_id)
+    ):
         raise AgentArgumentError("通知目标应为 user:QQ号 或 group:群号")
     return f"{target_type.lower()}:{target_id}"
 

@@ -4,6 +4,7 @@ from datetime import UTC, datetime, tzinfo
 
 from apscheduler.triggers.cron import CronTrigger
 
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.utils import QQ_TEXT_SAFE_LIMIT
 
 
@@ -87,7 +88,7 @@ def parse_group_schedule_command(
     if (
         target_type != "group"
         or not target_separator
-        or not target_id.isdigit()
+        or not is_ascii_decimal_id(target_id)
     ):
         raise SchedulerValidationError("目标必须是 group:群号")
 

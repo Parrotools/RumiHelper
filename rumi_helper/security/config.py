@@ -3,6 +3,8 @@
 import ipaddress
 from urllib.parse import urlsplit
 
+from rumi_helper.security.identifiers import is_ascii_decimal_id
+
 
 class SecurityConfigurationError(ValueError):
     """Runtime configuration would expose credentials or an unauthenticated service."""
@@ -22,6 +24,14 @@ def validate_runtime_security(settings) -> None:
     errors: list[str] = []
 
     host = str(settings.host).strip()
+
+    admin_ids = settings.admin_ids
+    if any(not is_ascii_decimal_id(value) for value in admin_ids):
+        errors.append("ADMIN_QQ_IDS 必须是逗号分隔的 ASCII 数字 QQ 号")
+    owner_id = str(settings.owner_id).strip()
+    if owner_id and not is_ascii_decimal_id(owner_id):
+        errors.append("OWNER_QQ_ID 必须是 ASCII 数字 QQ 号")
+
     if not str(settings.onebot_access_token).strip() and not is_loopback_host(host):
         errors.append(
             "非 loopback 监听时必须配置 ONEBOT_ACCESS_TOKEN"

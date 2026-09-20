@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from rumi_helper.database.db import Database
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.security.permissions import notification_target_requires_admin
 from rumi_helper.services.github.models import GitHubRepoRef, GitHubSnapshot
 from rumi_helper.services.notifications import NotificationSettingsService
@@ -368,7 +369,11 @@ class GitHubTracker:
     async def watch(self, owner_id: str, url: str, target: str) -> None:
         repo = await self._get_owned_repository(owner_id, url)
         target_type, separator, target_id = target.partition(":")
-        if not separator or target_type not in ("user", "group") or not target_id.isdigit():
+        if (
+            not separator
+            or target_type not in ("user", "group")
+            or not is_ascii_decimal_id(target_id)
+        ):
             raise GitHubTrackerError("通知目标应为 user:QQ号 或 group:群号")
         if (
             self._is_admin is not None

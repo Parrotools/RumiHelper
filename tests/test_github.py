@@ -962,6 +962,22 @@ async def test_tracker_watch_rejects_privileged_target_for_non_admin(db):
         await tracker.watch("10001", repo["repo_url"], "user:999")
 
 
+@pytest.mark.parametrize("target", ["user:²", "user:１２３", "group:①"])
+async def test_tracker_watch_rejects_non_ascii_numeric_target_ids(db, target):
+    tracker = GitHubTracker(
+        db,
+        FakeGitHubClient(_snapshot("first")),
+        is_admin=lambda _user_id: True,
+    )
+    repo = await tracker.add_repository(
+        "10001",
+        "https://github.com/OpenAI/openai-python",
+    )
+
+    with pytest.raises(GitHubTrackerError):
+        await tracker.watch("10001", repo["repo_url"], target)
+
+
 async def test_revoked_admin_github_targets_are_disabled_before_delivery(db):
     admins = {"10001"}
     client = FakeGitHubClient(_snapshot("first"))

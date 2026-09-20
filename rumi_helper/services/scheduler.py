@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from rumi_helper.database.db import Database
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 from rumi_helper.services import scheduler_parsing as _parsing
 from rumi_helper.services.llm.base import LLMProvider
 from rumi_helper.services.notifications import NotificationSettingsService
@@ -218,8 +219,8 @@ class SchedulerService:
         owner_id = str(owner_id).strip()
         group_id = str(group_id).strip()
         message = str(message).strip()
-        if not owner_id or not group_id.isdigit() or not message:
-            raise SchedulerValidationError("管理员、群号和消息内容不能为空，群号必须是数字")
+        if not owner_id or not is_ascii_decimal_id(group_id) or not message:
+            raise SchedulerValidationError("管理员、群号和消息内容不能为空，群号必须是 ASCII 数字")
         return await self.create_task(
             owner_id,
             GROUP_MESSAGE_TASK_TYPE,
@@ -239,8 +240,8 @@ class SchedulerService:
         owner_id = str(owner_id).strip()
         group_id = str(group_id).strip()
         topic = str(topic).strip()
-        if not owner_id or not group_id.isdigit() or not topic:
-            raise SchedulerValidationError("管理员、群号和主题不能为空，群号必须是数字")
+        if not owner_id or not is_ascii_decimal_id(group_id) or not topic:
+            raise SchedulerValidationError("管理员、群号和主题不能为空，群号必须是 ASCII 数字")
         return await self.create_task(
             owner_id,
             TOPIC_JOKE_TASK_TYPE,
@@ -408,7 +409,7 @@ class SchedulerService:
             message = str(payload.get("message", "")).strip()
             return (
                 payload.get("target_type") == "group"
-                and str(payload.get("target_id", "")).isdigit()
+                and is_ascii_decimal_id(payload.get("target_id", ""))
                 and bool(message)
                 and len(message) <= QQ_TEXT_SAFE_LIMIT
             )
@@ -416,7 +417,7 @@ class SchedulerService:
             topic = str(payload.get("topic", "")).strip()
             return (
                 payload.get("target_type") == "group"
-                and str(payload.get("target_id", "")).isdigit()
+                and is_ascii_decimal_id(payload.get("target_id", ""))
                 and bool(topic)
                 and len(topic) <= QQ_TEXT_SAFE_LIMIT
             )
@@ -475,7 +476,11 @@ class SchedulerService:
         target_type = str(payload.get("target_type", ""))
         target_id = str(payload.get("target_id", ""))
         message = str(payload.get("message", "")).strip()
-        if target_type != "group" or not target_id.isdigit() or not message:
+        if (
+            target_type != "group"
+            or not is_ascii_decimal_id(target_id)
+            or not message
+        ):
             raise SchedulerValidationError("定时群发任务数据无效")
         await self._dispatcher.enqueue_group(target_id, message)
 
@@ -486,7 +491,11 @@ class SchedulerService:
         target_type = str(payload.get("target_type", ""))
         target_id = str(payload.get("target_id", ""))
         topic = str(payload.get("topic", "")).strip()
-        if target_type != "group" or not target_id.isdigit() or not topic:
+        if (
+            target_type != "group"
+            or not is_ascii_decimal_id(target_id)
+            or not topic
+        ):
             raise SchedulerValidationError("主题段子任务数据无效")
 
         history = await self._db.fetch_scheduled_content_history(task["id"], limit=20)

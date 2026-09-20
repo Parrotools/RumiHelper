@@ -21,6 +21,7 @@ from rumi_helper.config_validation import numeric_limit_error
 from rumi_helper.personality.manager import PersonalityConfigError, PersonalityManager
 from rumi_helper.promptlib import load_prompt
 from rumi_helper.security.config import is_loopback_host
+from rumi_helper.security.identifiers import is_ascii_decimal_id
 
 CheckStatus = Literal["PASS", "WARN", "FAIL"]
 _REQUIRED_PROMPTS = ("agent.txt", "chat.txt", "webpage_summary.txt")
@@ -125,16 +126,24 @@ def _check_credentials(settings: Settings) -> list[DoctorCheck]:
     ]
 
     admin_ids = settings.admin_ids
-    if any(not value.isdigit() for value in admin_ids):
-        checks.append(DoctorCheck("admin_ids", "FAIL", "ADMIN_QQ_IDS 必须是逗号分隔的数字 QQ 号"))
+    if any(not is_ascii_decimal_id(value) for value in admin_ids):
+        checks.append(
+            DoctorCheck(
+                "admin_ids",
+                "FAIL",
+                "ADMIN_QQ_IDS 必须是逗号分隔的 ASCII 数字 QQ 号",
+            )
+        )
     elif not admin_ids:
         checks.append(DoctorCheck("admin_ids", "WARN", "未配置管理员；管理员命令将不可用"))
     else:
         checks.append(DoctorCheck("admin_ids", "PASS", f"已配置 {len(admin_ids)} 个管理员"))
 
     owner = settings.owner_id
-    if owner and not owner.isdigit():
-        checks.append(DoctorCheck("owner_id", "FAIL", "OWNER_QQ_ID 必须是数字 QQ 号"))
+    if owner and not is_ascii_decimal_id(owner):
+        checks.append(
+            DoctorCheck("owner_id", "FAIL", "OWNER_QQ_ID 必须是 ASCII 数字 QQ 号")
+        )
     elif owner:
         checks.append(DoctorCheck("owner_id", "PASS", "已配置"))
     else:

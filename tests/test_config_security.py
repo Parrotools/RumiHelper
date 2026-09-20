@@ -68,3 +68,18 @@ def test_runtime_security_rejects_sensitive_or_ambiguous_llm_base_urls(url):
 
     with pytest.raises(SecurityConfigurationError):
         validate_runtime_security(settings)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("admin_qq_ids", "１２３"),
+        ("admin_qq_ids", "²"),
+        ("owner_qq_id", "①"),
+    ],
+)
+def test_runtime_security_rejects_non_ascii_qq_ids(field, value):
+    settings = Settings(_env_file=None, **{field: value})
+
+    with pytest.raises(SecurityConfigurationError, match="ASCII"):
+        validate_runtime_security(settings)
