@@ -570,3 +570,15 @@ async def test_memory_dedup_migration_merges_legacy_duplicates(tmp_path):
             )
     finally:
         await upgraded.close()
+
+
+async def test_database_connect_rejects_corrupt_sqlite_file(tmp_path):
+    path = tmp_path / "corrupt.db"
+    path.write_bytes(b"not-a-sqlite-database")
+    database = Database(str(path))
+
+    with pytest.raises(sqlite3.DatabaseError):
+        await database.connect()
+
+    with pytest.raises(RuntimeError, match="未连接"):
+        _ = database.conn

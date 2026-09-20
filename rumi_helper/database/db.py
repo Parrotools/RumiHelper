@@ -73,6 +73,7 @@ class Database(
         try:
             connection.row_factory = aiosqlite.Row
             await connection.execute("PRAGMA busy_timeout=10000")
+            await self._quick_check()
             await self._execute_with_lock_retry("PRAGMA journal_mode=WAL")
             await self._apply_migrations()
         except Exception:
@@ -133,6 +134,13 @@ class Database(
             async with self.conn.execute(sql, params) as cursor:
                 rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+    async def _quick_check(self) -> None:
+        async with self.conn.execute("PRAGMA quick_check") as cursor:
+            rows = await cursor.fetchall()
+        details = [str(row[0]) for row in rows]
+        if details != ["ok"]:
+            raise sqlite3.DatabaseError("SQLite quick_check failed")
 
     async def _execute_with_lock_retry(
         self,

@@ -1,5 +1,6 @@
 import os
 import socket
+import sqlite3
 
 import pytest
 
@@ -358,3 +359,30 @@ def test_doctor_allows_matching_onebot_token_aliases(tmp_path):
     )
 
     assert statuses["onebot_token_alias"] == "PASS"
+
+
+def test_doctor_quick_checks_existing_sqlite_database(tmp_path):
+    database = tmp_path / "bot.db"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, database_path=str(database)))
+    )
+
+    assert statuses["database_integrity"] == "PASS"
+
+
+def test_doctor_rejects_corrupt_existing_database(tmp_path):
+    database = tmp_path / "bot.db"
+    database.write_bytes(b"not-a-sqlite-database")
+
+    statuses = _statuses(
+        run_checks(_settings(tmp_path, database_path=str(database)))
+    )
+
+    assert statuses["database_integrity"] == "FAIL"

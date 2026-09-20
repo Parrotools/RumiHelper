@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -51,6 +52,7 @@ def run_checks(settings: Settings) -> list[DoctorCheck]:
     checks.append(_check_prompts())
     checks.extend(_check_scheduler(settings))
     checks.append(_check_database_path(settings))
+    checks.append(_check_database_integrity(settings))
     checks.extend(_check_numeric_limits(settings))
     checks.append(_check_log_level(settings))
     return checks
@@ -316,6 +318,23 @@ def _check_database_path(settings: Settings) -> DoctorCheck:
     if not parent.exists() or not parent.is_dir() or not os.access(parent, os.W_OK):
         return DoctorCheck("database_path", "FAIL", "数据库目录不可写")
     return DoctorCheck("database_path", "PASS", f"{path}（将在首次启动创建）")
+
+
+def _check_database_integrity(settings: Settings) -> DoctorCheck:
+    path = Path(settings.database_path).expanduser()
+    if not path.exists() or not path.is_file():
+        return DoctorCheck("database_integrity", "PASS", "数据库尚未创建")
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = connection.execute("PRAGMA quick_check").fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return DoctorCheck("database_integrity", "FAIL", "SQLite quick_check 无法完成")
+    if [str(row[0]) for row in rows] != ["ok"]:
+        return DoctorCheck("database_integrity", "FAIL", "SQLite quick_check 未通过")
+    return DoctorCheck("database_integrity", "PASS", "SQLite quick_check ok")
 
 
 def _check_numeric_limits(settings: Settings) -> list[DoctorCheck]:
