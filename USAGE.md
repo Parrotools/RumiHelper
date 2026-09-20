@@ -273,7 +273,7 @@ user:789012
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `ONEBOT_ACCESS_TOKEN` | — | 与 NapCat 一致的 token |
+| `ONEBOT_V11_ACCESS_TOKEN` | — | 与 NapCat 一致的 token |
 | `HOST` / `PORT` | 127.0.0.1 / 8080 | Bot 反向 WS 监听地址 |
 | `LLM_BASE_URL` | GLM v4 | OpenAI Compatible 地址 |
 | `LLM_API_KEY` | — | API Key |

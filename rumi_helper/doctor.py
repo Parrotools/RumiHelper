@@ -122,8 +122,8 @@ def _check_credentials(settings: Settings) -> list[DoctorCheck]:
     checks = [
         DoctorCheck(
             "onebot_token",
-            "PASS" if settings.onebot_access_token.strip() else "WARN",
-            "已配置" if settings.onebot_access_token.strip() else "未配置；仅在 NapCat 同样关闭鉴权时可用",
+            "PASS" if settings.onebot_token else "WARN",
+            "已配置" if settings.onebot_token else "未配置；仅在 NapCat 同样关闭鉴权时可用",
         ),
         DoctorCheck(
             "llm_api_key",
@@ -161,7 +161,7 @@ def _check_credentials(settings: Settings) -> list[DoctorCheck]:
 def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
 
-    if settings.onebot_access_token.strip():
+    if settings.onebot_token:
         checks.append(DoctorCheck("onebot_exposure", "PASS", "OneBot 鉴权已启用"))
     elif is_loopback_host(settings.host):
         checks.append(
@@ -176,7 +176,8 @@ def _check_transport_security(settings: Settings) -> list[DoctorCheck]:
             DoctorCheck(
                 "onebot_exposure",
                 "FAIL",
-                "非 loopback 监听时必须配置 ONEBOT_ACCESS_TOKEN",
+                "非 loopback 监听时必须配置 ONEBOT_V11_ACCESS_TOKEN"
+                "（兼容旧 ONEBOT_ACCESS_TOKEN）",
             )
         )
 

@@ -4,10 +4,23 @@ NapCatQQ connects through OneBot 11 reverse WebSocket at:
     ws://<HOST>:<PORT>/onebot/v11/ws
 """
 
+import os
+
 import nonebot
 from fastapi.responses import JSONResponse
 from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
 
+from rumi_helper.config import Settings
+
+
+def _bridge_onebot_access_token() -> None:
+    """Expose the project's legacy token name under the adapter's canonical key."""
+    token = Settings().onebot_token
+    if token:
+        os.environ["ONEBOT_V11_ACCESS_TOKEN"] = token
+
+
+_bridge_onebot_access_token()
 nonebot.init()
 
 driver = nonebot.get_driver()

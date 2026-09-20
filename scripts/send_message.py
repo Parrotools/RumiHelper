@@ -6,7 +6,8 @@
 
 环境变量：
     ONEBOT_HTTP_URL     NapCat HTTP 服务端地址，如 http://127.0.0.1:3000
-    ONEBOT_ACCESS_TOKEN 与 NapCat 一致的 token
+    ONEBOT_V11_ACCESS_TOKEN 与 NapCat 一致的 token
+    ONEBOT_ACCESS_TOKEN     旧变量名，仍兼容
 """
 
 import ipaddress
@@ -36,7 +37,7 @@ def _validate_base_url(value: str, *, has_token: bool) -> str:
     if url.userinfo:
         raise ValueError("ONEBOT_HTTP_URL 不允许包含用户名或密码")
     if has_token and url.scheme == "http" and not _is_loopback_host(url.host):
-        raise ValueError("携带 ONEBOT_ACCESS_TOKEN 的远程地址必须使用 HTTPS")
+        raise ValueError("携带 OneBot access token 的远程地址必须使用 HTTPS")
     return str(url).rstrip("/")
 
 
@@ -52,7 +53,10 @@ def main() -> int:
         print("目标格式应为 user:QQ号 或 group:群号")
         return 2
 
-    token = os.environ.get("ONEBOT_ACCESS_TOKEN", "")
+    token = (
+        os.environ.get("ONEBOT_V11_ACCESS_TOKEN", "").strip()
+        or os.environ.get("ONEBOT_ACCESS_TOKEN", "").strip()
+    )
     try:
         base_url = _validate_base_url(
             os.environ.get("ONEBOT_HTTP_URL", "http://127.0.0.1:3000"),

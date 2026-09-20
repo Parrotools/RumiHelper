@@ -138,3 +138,24 @@ def test_main_handles_invalid_json_without_traceback(monkeypatch, capsys):
 
     assert send_message.main() == 1
     assert "无效 JSON" in capsys.readouterr().out
+
+
+def test_main_prefers_canonical_onebot_token(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["authorization"] = headers.get("Authorization")
+        return FakeResponse({"status": "ok", "retcode": 0, "data": {"message_id": 9}})
+
+    monkeypatch.setattr(send_message.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", "user:123", "hello"],
+    )
+    monkeypatch.setenv("ONEBOT_HTTP_URL", "https://onebot.example.com/api")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "legacy")
+    monkeypatch.setenv("ONEBOT_V11_ACCESS_TOKEN", "canonical")
+
+    assert send_message.main() == 0
+    assert captured["authorization"] == "Bearer canonical"

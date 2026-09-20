@@ -83,3 +83,21 @@ def test_runtime_security_rejects_non_ascii_qq_ids(field, value):
 
     with pytest.raises(SecurityConfigurationError, match="ASCII"):
         validate_runtime_security(settings)
+
+
+def test_onebot_token_prefers_canonical_adapter_setting():
+    settings = Settings(
+        _env_file=None,
+        onebot_v11_access_token="canonical",
+        onebot_access_token="legacy",
+    )
+    assert settings.onebot_token == "canonical"
+
+
+def test_onebot_token_falls_back_to_legacy_project_setting():
+    settings = Settings(
+        _env_file=None,
+        onebot_v11_access_token="",
+        onebot_access_token="legacy",
+    )
+    assert settings.onebot_token == "legacy"

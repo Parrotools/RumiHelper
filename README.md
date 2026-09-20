@@ -56,7 +56,7 @@ python -m venv .venv
 
 # 2. 配置
 copy .env.example .env                # Windows（Linux: cp）
-#   编辑 .env：填 LLM_API_KEY、自定 ONEBOT_ACCESS_TOKEN、ADMIN_QQ_IDS
+#   编辑 .env：填 LLM_API_KEY、自定 ONEBOT_V11_ACCESS_TOKEN、ADMIN_QQ_IDS
 
 # 3. 安装并登录 NapCatQQ（见下文第 5-7 节）
 
@@ -110,7 +110,9 @@ cp .env.example .env      # Windows: copy .env.example .env
 
 | 变量 | 说明 |
 |---|---|
-| `ONEBOT_ACCESS_TOKEN` | 自定一个随机字符串，**必须与 NapCat 侧填的完全一致** |
+| `ONEBOT_V11_ACCESS_TOKEN` | 自定一个随机字符串，**必须与 NapCat 侧填的完全一致** |
+
+> 兼容旧配置名 `ONEBOT_ACCESS_TOKEN`；新部署应使用 OneBot v11 adapter 的 canonical 名称 `ONEBOT_V11_ACCESS_TOKEN`。
 | `LLM_API_KEY` | 你的 LLM API Key |
 | `LLM_BASE_URL` / `LLM_MODEL` | 按厂商填，如 GLM：`https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash` |
 | `PERSONALITY_FILE` | 人格 YAML 文件路径，默认 `rumi_helper/personality/rumi.yaml` |
@@ -140,7 +142,7 @@ cp .env.example .env      # Windows: copy .env.example .env
 |---|---|
 | enable | `true` |
 | url | `ws://127.0.0.1:8080/onebot/v11/ws` |
-| token | 与 `.env` 中 `ONEBOT_ACCESS_TOKEN` **完全相同** |
+| token | 与 `.env` 中 `ONEBOT_V11_ACCESS_TOKEN` **完全相同** |
 | heartInterval | 默认即可 |
 
 对应 JSON（可直接改 NapCat 的 onebot11 配置文件）：
@@ -218,7 +220,7 @@ GITHUB_DIGEST_CRON=0 6,18 * * *
 
 只有管理员可以设置目标；清空目标后定时发送会自动关闭。修改 `.env` 中的时间后需要重启 Bot。
 
-主动发送也可以不经聊天窗口，用命令行（需 NapCat 开启 HTTP 服务端，环境变量 `ONEBOT_HTTP_URL` 指向其地址）。脚本允许本机 loopback 使用 HTTP；如果配置了 `ONEBOT_ACCESS_TOKEN` 且目标不是 loopback，则要求使用 HTTPS，避免 token 明文传输：
+主动发送也可以不经聊天窗口，用命令行（需 NapCat 开启 HTTP 服务端，环境变量 `ONEBOT_HTTP_URL` 指向其地址）。脚本允许本机 loopback 使用 HTTP；如果配置了 `ONEBOT_V11_ACCESS_TOKEN` 且目标不是 loopback，则要求使用 HTTPS，避免 token 明文传输：
 
 ```bash
 python scripts/send_message.py user:123456 "你好"

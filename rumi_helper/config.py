@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # OneBot / NoneBot
+    # Canonical NoneBot OneBot v11 token plus legacy project alias.
+    onebot_v11_access_token: str = ""
     onebot_access_token: str = ""
     host: str = "127.0.0.1"
     port: int = 8080
@@ -92,6 +94,14 @@ class Settings(BaseSettings):
     # 数据 / 日志
     database_path: str = "data/bot.db"
     log_level: str = "INFO"
+
+    @property
+    def onebot_token(self) -> str:
+        """Return the token actually passed to the OneBot v11 adapter."""
+        return (
+            self.onebot_v11_access_token.strip()
+            or self.onebot_access_token.strip()
+        )
 
     @property
     def admin_ids(self) -> frozenset[str]:

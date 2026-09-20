@@ -32,9 +32,10 @@ def validate_runtime_security(settings) -> None:
     if owner_id and not is_ascii_decimal_id(owner_id):
         errors.append("OWNER_QQ_ID 必须是 ASCII 数字 QQ 号")
 
-    if not str(settings.onebot_access_token).strip() and not is_loopback_host(host):
+    if not str(settings.onebot_token).strip() and not is_loopback_host(host):
         errors.append(
-            "非 loopback 监听时必须配置 ONEBOT_ACCESS_TOKEN"
+            "非 loopback 监听时必须配置 ONEBOT_V11_ACCESS_TOKEN"
+            "（兼容旧 ONEBOT_ACCESS_TOKEN）"
         )
 
     raw_llm_url = str(settings.llm_base_url).strip()
