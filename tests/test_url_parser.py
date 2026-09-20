@@ -60,13 +60,17 @@ def test_path_and_query_case_are_not_deduplicated():
     ]
 
 
-def test_safe_url_for_history_preserves_path_but_redacts_secrets():
+def test_safe_url_for_history_preserves_only_github_repo_path():
     assert safe_url_for_history(
-        "https://user:password@github.com/OpenAI/openai-python?token=secret#frag"
+        "https://user:password@github.com/OpenAI/openai-python/issues/123"
+        "?token=secret#frag"
     ) == "https://github.com/OpenAI/openai-python"
+    assert safe_url_for_history(
+        "https://example.com/private/document-id?token=secret#frag"
+    ) == "https://example.com/…"
     assert redact_url_secrets_in_text(
         "看看 https://user:password@example.com/private?a=secret#frag，然后继续。"
-    ) == "看看 https://example.com/private，然后继续。"
+    ) == "看看 https://example.com/…，然后继续。"
 
 
 def test_safe_url_for_log_redacts_credentials_path_query_and_fragment():

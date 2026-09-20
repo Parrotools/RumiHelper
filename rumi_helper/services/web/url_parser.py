@@ -51,16 +51,24 @@ def _dedupe_key(url: str) -> str:
 
 
 def safe_url_for_history(url: str) -> str:
-    """Preserve routing-relevant path while removing credentials, query, and fragment."""
+    """Keep only path information needed for deterministic repo references."""
     try:
         parsed = urlsplit(url)
         host = parsed.hostname or ""
-        if parsed.scheme.lower() not in {"http", "https"} or not host:
+        scheme = parsed.scheme.lower()
+        if scheme not in {"http", "https"} or not host:
             return "<invalid-url>"
+        normalized_host = host.lower()
         host_for_netloc = f"[{host}]" if ":" in host else host
         port = f":{parsed.port}" if parsed.port is not None else ""
-        path = parsed.path or "/"
-        return f"{parsed.scheme.lower()}://{host_for_netloc}{port}{path}"
+
+        if normalized_host == "github.com":
+            segments = [segment for segment in parsed.path.split("/") if segment]
+            path = f"/{segments[0]}/{segments[1]}" if len(segments) >= 2 else "/…"
+        else:
+            path = "/…" if parsed.path not in {"", "/"} else "/"
+
+        return f"{scheme}://{host_for_netloc}{port}{path}"
     except ValueError:
         return "<invalid-url>"
 
