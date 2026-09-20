@@ -30,6 +30,7 @@ def test_validate_runtime_limits_allows_documented_zero_disable_values():
         web_cache_ttl_seconds=0,
         outbound_terminal_history_limit=0,
         send_log_history_limit=0,
+        scheduled_task_history_limit=0,
     )
 
     validate_runtime_limits(settings)

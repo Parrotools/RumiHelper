@@ -212,6 +212,7 @@ async def _init_runtime_unlocked() -> Runtime:
             llm=llm,
             outbound_max_attempts=settings.outbound_max_attempts,
             max_active_reminders_per_user=settings.max_active_reminders_per_user,
+            task_history_limit=settings.scheduled_task_history_limit,
             is_admin=permission.is_admin,
         )
         stack.push_async_callback(scheduler.stop)

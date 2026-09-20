@@ -110,6 +110,50 @@ class SchedulerRepository:
                 await self.conn.rollback()
                 raise
 
+    async def prune_disabled_scheduled_tasks(self, limit: int) -> int:
+        """Keep active tasks forever and bound disabled task/history retention."""
+        limit = max(0, int(limit))
+        async with self.operation():
+            try:
+                if limit == 0:
+                    await self.conn.execute(
+                        "DELETE FROM scheduled_content_history "
+                        "WHERE task_id IN ("
+                        "  SELECT id FROM scheduled_tasks WHERE enabled = 0"
+                        ")"
+                    )
+                    async with self.conn.execute(
+                        "DELETE FROM scheduled_tasks WHERE enabled = 0"
+                    ) as cursor:
+                        deleted = cursor.rowcount
+                else:
+                    params = (limit,)
+                    await self.conn.execute(
+                        "DELETE FROM scheduled_content_history "
+                        "WHERE task_id IN ("
+                        "  SELECT id FROM scheduled_tasks "
+                        "  WHERE enabled = 0 AND id NOT IN ("
+                        "    SELECT id FROM scheduled_tasks WHERE enabled = 0 "
+                        "    ORDER BY id DESC LIMIT ?"
+                        "  )"
+                        ")",
+                        params,
+                    )
+                    async with self.conn.execute(
+                        "DELETE FROM scheduled_tasks "
+                        "WHERE enabled = 0 AND id NOT IN ("
+                        "  SELECT id FROM scheduled_tasks WHERE enabled = 0 "
+                        "  ORDER BY id DESC LIMIT ?"
+                        ")",
+                        params,
+                    ) as cursor:
+                        deleted = cursor.rowcount
+                await self.conn.commit()
+                return max(0, int(deleted))
+            except Exception:
+                await self.conn.rollback()
+                raise
+
     async def fetch_enabled_scheduled_tasks(self) -> list[dict]:
         return await self.fetchall("SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id")
 

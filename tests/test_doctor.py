@@ -262,6 +262,7 @@ def test_doctor_rejects_disabled_or_invalid_protective_limits(
         ("web_cache_ttl_seconds", -1),
         ("outbound_terminal_history_limit", -1),
         ("send_log_history_limit", -1),
+        ("scheduled_task_history_limit", -1),
         ("non_llm_reply_delay_min_seconds", -0.1),
         ("non_llm_reply_delay_max_seconds", -0.1),
     ],
@@ -279,6 +280,7 @@ def test_doctor_allows_documented_zero_disable_values(tmp_path):
                 web_cache_ttl_seconds=0,
                 outbound_terminal_history_limit=0,
                 send_log_history_limit=0,
+                scheduled_task_history_limit=0,
             )
         )
     )

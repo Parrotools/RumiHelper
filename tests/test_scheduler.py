@@ -1251,3 +1251,95 @@ async def test_reminder_enqueue_observes_latest_notification_state_across_connec
     finally:
         await first_db.close()
         await second_db.close()
+
+
+async def test_scheduled_task_history_prunes_only_old_disabled_rows_and_history(db):
+    created: list[int] = []
+    for index in range(4):
+        task_id = await db.create_scheduled_task(
+            "user-1",
+            "reminder",
+            {
+                "target_type": "user",
+                "target_id": "user-1",
+                "message": f"task-{index}",
+            },
+            None,
+            (datetime.now(UTC) + timedelta(hours=index + 1)).isoformat(),
+        )
+        created.append(task_id)
+        await db.insert_scheduled_content_history(task_id, f"history-{index}")
+        await db.update_scheduled_task_schedule(task_id, None, None, False)
+
+    active_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {
+            "target_type": "user",
+            "target_id": "user-1",
+            "message": "active",
+        },
+        None,
+        (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+    )
+    await db.insert_scheduled_content_history(active_id, "active-history")
+
+    deleted = await db.prune_disabled_scheduled_tasks(2)
+
+    assert deleted == 2
+    rows = await db.fetchall(
+        "SELECT id, enabled FROM scheduled_tasks ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {"id": created[2], "enabled": 0},
+        {"id": created[3], "enabled": 0},
+        {"id": active_id, "enabled": 1},
+    ]
+    history = await db.fetchall(
+        "SELECT task_id, content FROM scheduled_content_history ORDER BY task_id",
+        (),
+    )
+    assert history == [
+        {"task_id": created[2], "content": "history-2"},
+        {"task_id": created[3], "content": "history-3"},
+        {"task_id": active_id, "content": "active-history"},
+    ]
+
+
+async def test_scheduled_task_history_zero_limit_removes_all_disabled_rows(db):
+    disabled_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {
+            "target_type": "user",
+            "target_id": "user-1",
+            "message": "done",
+        },
+        None,
+        (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    await db.insert_scheduled_content_history(disabled_id, "done-history")
+    await db.update_scheduled_task_schedule(disabled_id, None, None, False)
+
+    active_id = await db.create_scheduled_task(
+        "user-1",
+        "reminder",
+        {
+            "target_type": "user",
+            "target_id": "user-1",
+            "message": "active",
+        },
+        None,
+        (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
+    )
+
+    assert await db.prune_disabled_scheduled_tasks(0) == 1
+    assert await db.fetchall(
+        "SELECT id FROM scheduled_tasks ORDER BY id",
+        (),
+    ) == [{"id": active_id}]
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM scheduled_content_history",
+        (),
+    ) == {"count": 0}

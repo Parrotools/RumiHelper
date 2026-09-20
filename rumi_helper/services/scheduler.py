@@ -45,6 +45,7 @@ class SchedulerService:
         shutdown_timeout_seconds: float = 10.0,
         outbound_max_attempts: int = 3,
         max_active_reminders_per_user: int = 50,
+        task_history_limit: int = 5000,
         is_admin: Callable[[str], bool] | None = None,
     ):
         try:
@@ -63,6 +64,7 @@ class SchedulerService:
             1,
             int(max_active_reminders_per_user),
         )
+        self._task_history_limit = max(0, int(task_history_limit))
         self._is_admin = is_admin
         self._active_runs: set[asyncio.Task] = set()
         self._handlers: dict[str, TaskHandler] = {
@@ -123,6 +125,7 @@ class SchedulerService:
     async def start(self) -> None:
         if self._started:
             return
+        await self._prune_task_history()
         for task in await self._db.fetch_enabled_scheduled_tasks():
             if not await self._ensure_task_valid(task):
                 continue
@@ -359,6 +362,13 @@ class SchedulerService:
         finally:
             if current is not None:
                 self._active_runs.discard(current)
+            await self._prune_task_history()
+
+    async def _prune_task_history(self) -> None:
+        try:
+            await self._db.prune_disabled_scheduled_tasks(self._task_history_limit)
+        except Exception:
+            logger.exception("定时任务历史清理失败")
 
     async def _ensure_task_valid(self, task: dict) -> bool:
         task_type = str(task.get("task_type", ""))
