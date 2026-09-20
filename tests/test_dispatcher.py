@@ -39,6 +39,29 @@ async def test_send_user_success_logs(db):
     assert logs[0]["content"] == ""
 
 
+async def test_direct_send_forces_onebot_plain_text_mode(db):
+    captured = {}
+
+    async def caller(action: str, **params) -> dict:
+        captured.update(action=action, **params)
+        return {"message_id": "mid-1"}
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=0,
+        api_caller=caller,
+    )
+    payload = "[CQ:at,qq=all] [CQ:image,file=https://example.com/x]"
+
+    result = await dispatcher.send_group("456", payload)
+
+    assert result.success is True
+    assert captured["action"] == "send_group_msg"
+    assert captured["group_id"] == 456
+    assert captured["message"] == payload
+    assert captured["auto_escape"] is True
+
+
 async def test_send_failure_recorded(db):
     d = MessageDispatcher(db, rate_limit_per_second=0, api_caller=_fake_caller({"999"}))
     r = await d.send_group("999", "hi")

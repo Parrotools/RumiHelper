@@ -206,7 +206,9 @@ async def test_chat_uses_personality_in_system_prompt(monkeypatch):
     await ai_chat._handle(event)
 
     assert seen[0][0]["content"].startswith("PERSONALITY\n")
-    assert sent == ["答复"]
+    assert len(sent) == 1
+    assert sent[0].type == "text"
+    assert sent[0].data["text"] == "答复"
 
 
 @pytest.mark.asyncio
@@ -322,7 +324,12 @@ async def test_owner_identity_question_uses_verified_identity(monkeypatch):
 
     await ai_chat._handle(event)
 
-    assert sent == ["当然认识呀，你是 Parrotools，我的主人。刚才我把“不知道私人细节”和“不认识你”混在一起了，是我说错啦。"]
+    assert len(sent) == 1
+    assert sent[0].type == "text"
+    assert sent[0].data["text"] == (
+        "当然认识呀，你是 Parrotools，我的主人。"
+        "刚才我把“不知道私人细节”和“不认识你”混在一起了，是我说错啦。"
+    )
 
 
 def test_default_personality_path_falls_back_to_installed_package_data(tmp_path, monkeypatch):

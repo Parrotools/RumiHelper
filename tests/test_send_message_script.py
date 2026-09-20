@@ -92,8 +92,34 @@ def test_main_sends_auth_and_message_to_secure_remote(monkeypatch, capsys):
     assert send_message.main() == 0
     assert captured["url"] == "https://onebot.example.com/api/send_group_msg"
     assert captured["headers"]["Authorization"] == "Bearer secret"
-    assert captured["json"] == {"group_id": 456, "message": "hello"}
+    assert captured["json"] == {
+        "group_id": 456,
+        "message": "hello",
+        "auto_escape": True,
+    }
     assert "message_id=7" in capsys.readouterr().out
+
+
+def test_main_marks_cq_code_payload_as_plain_text(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json, headers=headers, timeout=timeout)
+        return FakeResponse({"status": "ok", "retcode": 0, "data": {"message_id": 8}})
+
+    payload = "[CQ:at,qq=all]"
+    monkeypatch.setattr(send_message.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", "group:456", payload],
+    )
+    monkeypatch.setenv("ONEBOT_HTTP_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "")
+
+    assert send_message.main() == 0
+    assert captured["json"]["message"] == payload
+    assert captured["json"]["auto_escape"] is True
 
 
 def test_main_handles_invalid_json_without_traceback(monkeypatch, capsys):

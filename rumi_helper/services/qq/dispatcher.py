@@ -321,7 +321,15 @@ class MessageDispatcher:
             return result
 
         action = "send_private_msg" if target_type == "user" else "send_group_msg"
-        params: dict = {"message": message, **({"user_id": numeric_id} if target_type == "user" else {"group_id": numeric_id})}
+        params: dict = {
+            "message": message,
+            "auto_escape": True,
+            **(
+                {"user_id": numeric_id}
+                if target_type == "user"
+                else {"group_id": numeric_id}
+            ),
+        }
         try:
             resp = await self._call_api(action, **params)
             if not isinstance(resp, dict) or resp.get("message_id") is None:

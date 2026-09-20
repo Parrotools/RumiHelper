@@ -51,7 +51,9 @@ async def test_send_local_reply_uses_dynamic_delay(monkeypatch):
     await send_local_reply(FakeMatcher(), runtime, "a" * 70)
 
     assert delays == [2.0]
-    assert sent == ["a" * 70]
+    assert len(sent) == 1
+    assert sent[0].type == "text"
+    assert sent[0].data["text"] == "a" * 70
 
 
 def test_truncate_for_qq_respects_total_limit():
@@ -96,8 +98,9 @@ async def test_send_reply_applies_global_qq_text_limit():
     await send_reply(FakeMatcher(), runtime, "x" * (QQ_TEXT_SAFE_LIMIT + 100))
 
     assert len(sent) == 1
-    assert len(sent[0]) <= QQ_TEXT_SAFE_LIMIT
-    assert "内容过长已截断" in sent[0]
+    assert sent[0].type == "text"
+    assert len(sent[0].data["text"]) <= QQ_TEXT_SAFE_LIMIT
+    assert "内容过长已截断" in sent[0].data["text"]
 
 
 @pytest.mark.asyncio
@@ -118,4 +121,26 @@ async def test_send_local_reply_can_be_disabled(monkeypatch):
     await send_local_reply(FakeMatcher(), runtime, "立即回复")
 
     assert delays == []
-    assert sent == ["立即回复"]
+    assert len(sent) == 1
+    assert sent[0].type == "text"
+    assert sent[0].data["text"] == "立即回复"
+
+
+@pytest.mark.asyncio
+async def test_send_reply_keeps_cq_codes_as_literal_text():
+    sent = []
+
+    class FakeMatcher:
+        async def send(self, message) -> None:
+            sent.append(message)
+
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(interactive_send_rate_limit_per_second=0)
+    )
+    payload = "[CQ:at,qq=all] [CQ:image,file=https://example.com/x]"
+
+    await send_reply(FakeMatcher(), runtime, payload)
+
+    assert len(sent) == 1
+    assert sent[0].type == "text"
+    assert sent[0].data["text"] == payload

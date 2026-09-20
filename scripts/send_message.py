@@ -63,9 +63,17 @@ def main() -> int:
         return 2
 
     if type_ == "user":
-        action, params = "send_private_msg", {"user_id": int(target_id), "message": message}
+        action, params = "send_private_msg", {
+            "user_id": int(target_id),
+            "message": message,
+            "auto_escape": True,
+        }
     else:
-        action, params = "send_group_msg", {"group_id": int(target_id), "message": message}
+        action, params = "send_group_msg", {
+            "group_id": int(target_id),
+            "message": message,
+            "auto_escape": True,
+        }
 
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:

@@ -4,6 +4,8 @@ import asyncio
 import time
 from typing import Any
 
+from nonebot.adapters.onebot.v11 import MessageSegment
+
 QQ_TEXT_SAFE_LIMIT = 4000
 
 
@@ -76,7 +78,9 @@ async def send_reply(matcher: Any, runtime: Any, message: str) -> None:
         except AttributeError:
             pass
     await gate.wait_for_slot(max(0.0, rate))
-    await matcher.send(truncate_for_qq(str(message)))
+    await matcher.send(
+        MessageSegment.text(truncate_for_qq(str(message)))
+    )
 
 
 async def send_local_reply(matcher: Any, runtime: Any, message: str) -> None:

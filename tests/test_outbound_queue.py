@@ -18,7 +18,7 @@ async def db(tmp_path):
 async def test_outbound_queue_delivers_a_scheduled_message(db):
     async def api_caller(action: str, **params) -> dict:
         assert action == "send_private_msg"
-        assert params == {"user_id": 123, "message": "提醒内容"}
+        assert params == {"user_id": 123, "message": "提醒内容", "auto_escape": True}
         return {"message_id": 9}
 
     dispatcher = MessageDispatcher(db, api_caller=api_caller)
