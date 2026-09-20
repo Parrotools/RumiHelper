@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == list(range(1, 16))
+        assert await upgraded.migration_versions() == list(range(1, 17))
         columns = await upgraded.fetchall("PRAGMA table_info(outbound_messages)", ())
         assert "lease_token" in {str(column["name"]) for column in columns}
         control_columns = await upgraded.fetchall(
@@ -195,7 +195,7 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
 
 
 async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
-    expected = list(range(1, 16))
+    expected = list(range(1, 17))
     for index in range(10):
         path = str(tmp_path / f"concurrent-connect-{index}.db")
         first = Database(path)
@@ -382,7 +382,7 @@ async def test_message_role_sanitization_migration_downgrades_legacy_system_role
     upgraded = Database(path)
     await upgraded.connect()
     try:
-        assert await upgraded.migration_versions() == list(range(1, 16))
+        assert await upgraded.migration_versions() == list(range(1, 17))
         assert await upgraded.fetchone(
             "SELECT role, content FROM messages WHERE session_key = ?",
             ("private:legacy",),
@@ -458,7 +458,7 @@ async def test_github_repository_nocase_migration_merges_legacy_duplicates(tmp_p
     upgraded = Database(path)
     await upgraded.connect()
     try:
-        assert await upgraded.migration_versions() == list(range(1, 16))
+        assert await upgraded.migration_versions() == list(range(1, 17))
         repos = await upgraded.fetchall(
             "SELECT id, owner_id, repo_owner, repo_name "
             "FROM github_repositories ORDER BY id",

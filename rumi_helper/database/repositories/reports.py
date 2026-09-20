@@ -98,13 +98,15 @@ class ReportRepository:
                     if created:
                         await self.conn.execute(
                             "INSERT INTO outbound_messages "
-                            "(target_type, target_id, content, max_attempts, next_attempt_at) "
-                            "VALUES ('user', ?, ?, ?, ?)",
+                            "(target_type, target_id, content, max_attempts, next_attempt_at, "
+                            "notification_kind, notification_owner_id) "
+                            "VALUES ('user', ?, ?, ?, ?, 'report', ?)",
                             (
                                 owner_id,
                                 _outbound_content(delivery_content),
                                 max(1, int(max_attempts)),
                                 next_attempt_at,
+                                owner_id,
                             ),
                         )
                         queued += 1

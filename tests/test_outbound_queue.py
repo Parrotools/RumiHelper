@@ -610,3 +610,149 @@ async def test_stale_outbound_lease_owner_cannot_finalize_after_reclaim(db):
         "new-owner",
         lease_token=second_token,
     ) is True
+
+
+@pytest.mark.parametrize(
+    ("notification_kind", "setting_field"),
+    [
+        ("reminder", "reminder_notify"),
+        ("github", "github_notify"),
+        ("report", "daily_report"),
+    ],
+)
+async def test_queued_notification_is_discarded_if_user_disables_before_send(
+    db,
+    notification_kind,
+    setting_field,
+):
+    await db.patch_notification_settings(
+        "123",
+        **{setting_field: True},
+    )
+    await db.execute(
+        "INSERT INTO outbound_messages "
+        "(target_type, target_id, content, max_attempts, next_attempt_at, "
+        "notification_kind, notification_owner_id) "
+        "VALUES ('user', '123', 'queued notification', 3, "
+        "datetime('now'), ?, '123')",
+        (notification_kind,),
+    )
+    await db.patch_notification_settings(
+        "123",
+        **{setting_field: False},
+    )
+
+    calls = 0
+
+    async def api_caller(action: str, **params) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"message_id": 1}
+
+    dispatcher = MessageDispatcher(db, api_caller=api_caller)
+    assert await dispatcher.process_outbound_messages(limit=1) == 1
+    assert calls == 0
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
+
+
+async def test_manual_outbound_is_not_gated_by_notification_settings(db):
+    await db.patch_notification_settings(
+        "123",
+        reminder_notify=False,
+        github_notify=False,
+        daily_report=False,
+    )
+    calls = 0
+
+    async def api_caller(action: str, **params) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"message_id": 42}
+
+    dispatcher = MessageDispatcher(db, api_caller=api_caller)
+    message_id = await dispatcher.enqueue_user("123", "manual")
+
+    assert await dispatcher.process_outbound_messages(limit=1) == 1
+    assert calls == 1
+    assert await db.fetchone(
+        "SELECT status FROM outbound_messages WHERE id = ?",
+        (message_id,),
+    ) == {"status": "sent"}
+
+async def test_notification_producers_tag_outbound_source_metadata(db):
+    await db.patch_notification_settings(
+        "123",
+        reminder_notify=True,
+        github_notify=True,
+        daily_report=True,
+    )
+
+    assert await db.enqueue_reminder_if_enabled("123", "reminder", 3) is True
+
+    queued_reports = await db.save_reports_and_enqueue_users(
+        [
+            {
+                "owner_id": "123",
+                "report_type": "daily",
+                "period_start": "2030-01-01 00:00:00",
+                "period_end": "2030-01-02 00:00:00",
+                "content": "ignored",
+                "delivery_content": "report",
+            }
+        ],
+        3,
+    )
+    assert queued_reports == 1
+
+    repo_id = await db.insert_github_repository(
+        "123",
+        "OpenAI",
+        "openai-python",
+        "https://github.com/OpenAI/openai-python",
+    )
+    snapshot_id, queued_github = await db.insert_github_snapshot_and_outbound(
+        repo_id,
+        {
+            "stars": 1,
+            "forks": 0,
+            "watchers": 0,
+            "commits_count": 1,
+            "latest_commit_sha": "abc",
+            "latest_commit_message": "commit",
+            "latest_commit_author": "alice",
+            "latest_commit_time": "2030-01-01T00:00:00Z",
+            "latest_release": None,
+            "open_issues_count": 0,
+        },
+        [{"target_type": "user", "target_id": "123", "content": "github"}],
+        3,
+        0,
+    )
+    assert snapshot_id is not None
+    assert queued_github == 1
+
+    rows = await db.fetchall(
+        "SELECT content, notification_kind, notification_owner_id "
+        "FROM outbound_messages ORDER BY id",
+        (),
+    )
+    assert rows == [
+        {
+            "content": "reminder",
+            "notification_kind": "reminder",
+            "notification_owner_id": "123",
+        },
+        {
+            "content": "report",
+            "notification_kind": "report",
+            "notification_owner_id": "123",
+        },
+        {
+            "content": "github",
+            "notification_kind": "github",
+            "notification_owner_id": "123",
+        },
+    ]

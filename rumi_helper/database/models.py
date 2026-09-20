@@ -169,6 +169,16 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_content_history_task
     ON scheduled_content_history(task_id, id DESC);
 """
 
+OUTBOUND_NOTIFICATION_SOURCE_SCHEMA = OUTBOUND_MESSAGES_SCHEMA + """
+ALTER TABLE outbound_messages
+ADD COLUMN notification_kind TEXT
+CHECK(notification_kind IN ('reminder', 'github', 'report') OR notification_kind IS NULL);
+ALTER TABLE outbound_messages
+ADD COLUMN notification_owner_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_outbound_notification_source
+    ON outbound_messages(notification_kind, notification_owner_id, status);
+"""
+
 OUTBOUND_CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS outbound_control (
     id           INTEGER PRIMARY KEY CHECK(id = 1),
@@ -328,4 +338,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (13, OUTBOUND_SEND_SLOT_SCHEMA),
     (14, MESSAGE_ROLE_SANITIZATION_SCHEMA),
     (15, GITHUB_REPOSITORY_NOCASE_SCHEMA),
+    (16, OUTBOUND_NOTIFICATION_SOURCE_SCHEMA),
 )

@@ -89,6 +89,45 @@ class OutboundRepository:
                     return None
             return await self.fetchone("SELECT * FROM outbound_messages WHERE id = ?", (message_id,))
 
+    async def outbound_notification_enabled(
+        self,
+        owner_id: str,
+        notification_kind: str,
+    ) -> bool:
+        kind = str(notification_kind)
+        if kind == "reminder":
+            sql = (
+                "SELECT reminder_notify AS enabled "
+                "FROM notification_settings WHERE user_id = ?"
+            )
+        elif kind == "github":
+            sql = (
+                "SELECT github_notify AS enabled "
+                "FROM notification_settings WHERE user_id = ?"
+            )
+        elif kind == "report":
+            sql = (
+                "SELECT daily_report AS enabled "
+                "FROM notification_settings WHERE user_id = ?"
+            )
+        else:
+            return True
+        row = await self.fetchone(sql, (str(owner_id),))
+        return bool(row and row["enabled"])
+
+    async def discard_claimed_outbound_message(
+        self,
+        message_id: int,
+        lease_token: str,
+    ) -> bool:
+        async with self.operation(), self.conn.execute(
+            "DELETE FROM outbound_messages "
+            "WHERE id = ? AND status = 'sending' AND lease_token = ?",
+            (int(message_id), str(lease_token)),
+        ) as cursor:
+            await self.conn.commit()
+            return cursor.rowcount == 1
+
     async def renew_outbound_message_lease(
         self,
         message_id: int,

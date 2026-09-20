@@ -209,7 +209,7 @@ class GitHubRepository:
                 queued = 0
                 if deliveries:
                     async with self.conn.execute(
-                        "SELECT 1 "
+                        "SELECT repo.owner_id "
                         "FROM github_repositories AS repo "
                         "JOIN notification_settings AS settings "
                         "  ON settings.user_id = repo.owner_id "
@@ -218,11 +218,13 @@ class GitHubRepository:
                     ) as cursor:
                         notifications_enabled = await cursor.fetchone()
                     if notifications_enabled is not None:
+                        notification_owner_id = str(notifications_enabled["owner_id"])
                         next_attempt_at = _now()
                         await self.conn.executemany(
                             "INSERT INTO outbound_messages "
-                            "(target_type, target_id, content, max_attempts, next_attempt_at) "
-                            "VALUES (?, ?, ?, ?, ?)",
+                            "(target_type, target_id, content, max_attempts, next_attempt_at, "
+                            "notification_kind, notification_owner_id) "
+                            "VALUES (?, ?, ?, ?, ?, 'github', ?)",
                             [
                                 (
                                     str(delivery["target_type"]),
@@ -230,6 +232,7 @@ class GitHubRepository:
                                     _outbound_content(delivery["content"]),
                                     max(1, int(max_attempts)),
                                     next_attempt_at,
+                                    notification_owner_id,
                                 )
                                 for delivery in deliveries
                             ],

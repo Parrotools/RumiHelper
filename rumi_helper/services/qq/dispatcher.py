@@ -209,6 +209,33 @@ class MessageDispatcher:
                 logger.error("主动消息领取缺少 lease token message_id=%s", message_id)
                 break
 
+            notification_kind = str(row.get("notification_kind") or "")
+            notification_owner_id = str(row.get("notification_owner_id") or "")
+            if notification_kind and notification_owner_id:
+                enabled = await self._db.outbound_notification_enabled(
+                    notification_owner_id,
+                    notification_kind,
+                )
+                if not enabled:
+                    discarded = await self._db.discard_claimed_outbound_message(
+                        message_id,
+                        lease_token,
+                    )
+                    if discarded:
+                        processed += 1
+                        logger.info(
+                            "通知已关闭，丢弃待发送消息 message_id=%s kind=%s owner=%s",
+                            message_id,
+                            notification_kind,
+                            notification_owner_id,
+                        )
+                    else:
+                        logger.warning(
+                            "通知关闭后丢弃失败，lease 已转移 message_id=%s",
+                            message_id,
+                        )
+                    continue
+
             heartbeat_stop = asyncio.Event()
             heartbeat = asyncio.create_task(
                 self._lease_heartbeat(message_id, lease_token, heartbeat_stop),

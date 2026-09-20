@@ -89,8 +89,9 @@ class SchedulerRepository:
             try:
                 async with self.conn.execute(
                     "INSERT INTO outbound_messages "
-                    "(target_type, target_id, content, max_attempts, next_attempt_at) "
-                    "SELECT 'user', ?, ?, ?, ? "
+                    "(target_type, target_id, content, max_attempts, next_attempt_at, "
+                    "notification_kind, notification_owner_id) "
+                    "SELECT 'user', ?, ?, ?, ?, 'reminder', ? "
                     "WHERE EXISTS ("
                     "  SELECT 1 FROM notification_settings "
                     "  WHERE user_id = ? AND reminder_notify = 1"
@@ -100,6 +101,7 @@ class SchedulerRepository:
                         _outbound_content(content),
                         max(1, int(max_attempts)),
                         _now(),
+                        str(owner_id),
                         str(owner_id),
                     ),
                 ) as cursor:
