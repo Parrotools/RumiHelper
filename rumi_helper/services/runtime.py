@@ -120,6 +120,9 @@ async def _confirmation_housekeeping_loop(
         try:
             await asyncio.sleep(interval)
             await _recover_expired_confirmations(db)
+            await db.prune_expired_session_turn_leases(
+                datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+            )
             if (
                 sessions is not None
                 and session_retention_days > 0
@@ -175,6 +178,9 @@ async def _init_runtime_unlocked() -> Runtime:
         stack.push_async_callback(db.close)
 
         await _recover_expired_confirmations(db)
+        await db.prune_expired_session_turn_leases(
+            datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+        )
 
         personality = PersonalityManager(settings.personality_file)
 

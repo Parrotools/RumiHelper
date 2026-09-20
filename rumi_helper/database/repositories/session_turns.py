@@ -45,3 +45,12 @@ class SessionTurnRepository:
         ) as cursor:
             await self.conn.commit()
             return cursor.rowcount == 1
+
+    async def prune_expired_session_turn_leases(self, now: str) -> int:
+        async with self.operation(), self.conn.execute(
+            "DELETE FROM session_turn_leases WHERE expires_at <= ?",
+            (str(now),),
+        ) as cursor:
+            deleted = max(0, int(cursor.rowcount))
+            await self.conn.commit()
+            return deleted

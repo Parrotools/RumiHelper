@@ -607,3 +607,44 @@ async def test_close_runtime_preserves_shutdown_order_and_isolates_failures(monk
         "fetcher",
         "db",
     ]
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_prunes_expired_session_turn_leases(tmp_path):
+    db = Database(str(tmp_path / "session-lease-housekeeping.db"))
+    await db.connect()
+    await db.execute(
+        "INSERT INTO session_turn_leases (session_key, lease_token, expires_at) "
+        "VALUES (?, ?, ?), (?, ?, ?)",
+        (
+            "private:expired",
+            "expired-token",
+            "2000-01-01 00:00:00.000000",
+            "private:live",
+            "live-token",
+            "2099-01-01 00:00:00.000000",
+        ),
+    )
+
+    housekeeping = asyncio.create_task(
+        runtime_module._confirmation_housekeeping_loop(
+            db,
+            interval_seconds=0.01,
+        )
+    )
+    try:
+        for _ in range(50):
+            rows = await db.fetchall(
+                "SELECT session_key FROM session_turn_leases ORDER BY session_key",
+                (),
+            )
+            if rows == [{"session_key": "private:live"}]:
+                break
+            await asyncio.sleep(0.01)
+        assert rows == [{"session_key": "private:live"}]
+        assert housekeeping.done() is False
+    finally:
+        housekeeping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await housekeeping
+        await db.close()

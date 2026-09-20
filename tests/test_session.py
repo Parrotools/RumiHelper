@@ -474,3 +474,28 @@ async def test_old_session_turn_owner_cannot_release_new_owner_lease(db):
         (key,),
     )
     assert row == {"lease_token": "new-token"}
+
+
+async def test_prune_expired_session_turn_leases_keeps_live_lease(db):
+    await db.execute(
+        "INSERT INTO session_turn_leases (session_key, lease_token, expires_at) "
+        "VALUES (?, ?, ?), (?, ?, ?)",
+        (
+            "private:expired",
+            "expired-token",
+            "2000-01-01 00:00:00.000000",
+            "private:live",
+            "live-token",
+            "2099-01-01 00:00:00.000000",
+        ),
+    )
+
+    deleted = await db.prune_expired_session_turn_leases(
+        "2030-01-01 00:00:00.000000"
+    )
+
+    assert deleted == 1
+    assert await db.fetchall(
+        "SELECT session_key, lease_token FROM session_turn_leases ORDER BY session_key",
+        (),
+    ) == [{"session_key": "private:live", "lease_token": "live-token"}]
