@@ -366,3 +366,111 @@ async def test_active_turn_refreshes_stale_session_before_retention_prune(db):
 
     release.set()
     await running
+
+
+async def test_turn_serializes_same_session_across_database_connections(tmp_path):
+    path = str(tmp_path / "session-turn-race.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    first = SessionManager(
+        first_db,
+        turn_lease_seconds=1.0,
+        turn_lease_poll_seconds=0.01,
+    )
+    second = SessionManager(
+        second_db,
+        turn_lease_seconds=1.0,
+        turn_lease_poll_seconds=0.01,
+    )
+    key = SessionManager.private_key("cross-process")
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def hold_first():
+        async with first.turn(key):
+            first_entered.set()
+            await release_first.wait()
+
+    async def wait_second():
+        await first_entered.wait()
+        async with second.turn(key):
+            second_entered.set()
+
+    first_task = asyncio.create_task(hold_first())
+    second_task = asyncio.create_task(wait_second())
+    try:
+        await first_entered.wait()
+        await asyncio.sleep(0.05)
+        assert second_entered.is_set() is False
+
+        release_first.set()
+        await asyncio.wait_for(second_entered.wait(), timeout=1.0)
+        await asyncio.gather(first_task, second_task)
+    finally:
+        for task in (first_task, second_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(first_task, second_task, return_exceptions=True)
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_turn_recovers_expired_cross_process_lease(tmp_path):
+    path = str(tmp_path / "session-turn-expired.db")
+    first_db = Database(path)
+    second_db = Database(path)
+    await first_db.connect()
+    await second_db.connect()
+    key = SessionManager.private_key("expired")
+    await first_db.execute(
+        "INSERT INTO session_turn_leases (session_key, lease_token, expires_at) "
+        "VALUES (?, ?, ?)",
+        (key, "dead-owner", "2000-01-01 00:00:00.000000"),
+    )
+    sessions = SessionManager(
+        second_db,
+        turn_lease_seconds=1.0,
+        turn_lease_poll_seconds=0.01,
+    )
+    try:
+        async with sessions.turn(key):
+            row = await second_db.fetchone(
+                "SELECT lease_token, expires_at FROM session_turn_leases "
+                "WHERE session_key = ?",
+                (key,),
+            )
+            assert row is not None
+            assert row["lease_token"] != "dead-owner"
+        assert await second_db.fetchone(
+            "SELECT session_key FROM session_turn_leases WHERE session_key = ?",
+            (key,),
+        ) is None
+    finally:
+        await first_db.close()
+        await second_db.close()
+
+
+async def test_old_session_turn_owner_cannot_release_new_owner_lease(db):
+    key = SessionManager.private_key("lease-token")
+    assert await db.claim_session_turn(
+        key,
+        "old-token",
+        "2000-01-01 00:00:00.000000",
+        "2000-01-01 00:00:01.000000",
+    ) is True
+    assert await db.claim_session_turn(
+        key,
+        "new-token",
+        "2000-01-01 00:00:02.000000",
+        "2099-01-01 00:00:00.000000",
+    ) is True
+
+    assert await db.release_session_turn(key, "old-token") is False
+    row = await db.fetchone(
+        "SELECT lease_token FROM session_turn_leases WHERE session_key = ?",
+        (key,),
+    )
+    assert row == {"lease_token": "new-token"}

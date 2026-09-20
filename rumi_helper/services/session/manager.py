@@ -7,6 +7,8 @@ session key 规则：
 """
 
 import asyncio
+import logging
+import secrets
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,6 +19,8 @@ from rumi_helper.database.db import Database
 _TRUNCATION_MARKER = "\n…[上下文已截断]…\n"
 _PERSISTED_ROLES = frozenset({"user", "assistant"})
 
+logger = logging.getLogger(__name__)
+
 
 class SessionManager:
     def __init__(
@@ -24,28 +28,104 @@ class SessionManager:
         db: Database,
         max_context_messages: int = 20,
         max_context_chars: int = 16000,
+        turn_lease_seconds: float = 30.0,
+        turn_lease_poll_seconds: float = 0.05,
     ):
         self._db = db
         self._max = max(2, int(max_context_messages))
         self._max_chars = max(1, int(max_context_chars))
+        self._turn_lease_seconds = max(5.0, float(turn_lease_seconds))
+        self._turn_lease_poll_seconds = max(0.01, float(turn_lease_poll_seconds))
         self._turn_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
 
     @asynccontextmanager
     async def turn(self, session_key: str) -> AsyncIterator[None]:
-        """Serialize one complete conversational turn per session."""
+        """Serialize one complete conversational turn across tasks and Bot processes."""
         lock = self._turn_locks.setdefault(session_key, asyncio.Lock())
         async with lock:
-            # Protect an old-but-now-active session from retention pruning while
-            # this turn is still waiting on the LLM/tool path and has not yet
-            # persisted its new user/assistant pair.
-            await self._db.execute(
-                "UPDATE sessions SET updated_at = datetime('now') "
-                "WHERE session_key = ?",
-                (session_key,),
+            lease_token = secrets.token_urlsafe(24)
+            await self._acquire_turn_lease(session_key, lease_token)
+            heartbeat_stop = asyncio.Event()
+            owner_task = asyncio.current_task()
+            heartbeat = asyncio.create_task(
+                self._renew_turn_lease(
+                    session_key,
+                    lease_token,
+                    heartbeat_stop,
+                    owner_task,
+                ),
+                name=f"session-turn-lease:{session_key}",
             )
-            yield
+            try:
+                # Protect an old-but-now-active session from retention pruning while
+                # this turn is still waiting on the LLM/tool path and has not yet
+                # persisted its new user/assistant pair.
+                await self._db.execute(
+                    "UPDATE sessions SET updated_at = datetime('now') "
+                    "WHERE session_key = ?",
+                    (session_key,),
+                )
+                yield
+            finally:
+                heartbeat_stop.set()
+                try:
+                    await heartbeat
+                except Exception as exc:  # noqa: BLE001 - release must still run
+                    logger.warning(
+                        "session turn lease heartbeat failed session=%s error=%s",
+                        session_key,
+                        type(exc).__name__,
+                    )
+                await self._db.release_session_turn(session_key, lease_token)
+
+    async def _acquire_turn_lease(self, session_key: str, lease_token: str) -> None:
+        while True:
+            now = datetime.now(UTC)
+            expires_at = now + timedelta(seconds=self._turn_lease_seconds)
+            if await self._db.claim_session_turn(
+                session_key,
+                lease_token,
+                self._lease_timestamp(now),
+                self._lease_timestamp(expires_at),
+            ):
+                return
+            await asyncio.sleep(self._turn_lease_poll_seconds)
+
+    async def _renew_turn_lease(
+        self,
+        session_key: str,
+        lease_token: str,
+        stop: asyncio.Event,
+        owner_task: asyncio.Task | None,
+    ) -> None:
+        interval = max(1.0, self._turn_lease_seconds / 3.0)
+        while True:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                expires_at = datetime.now(UTC) + timedelta(
+                    seconds=self._turn_lease_seconds
+                )
+                renewed = await self._db.renew_session_turn(
+                    session_key,
+                    lease_token,
+                    self._lease_timestamp(expires_at),
+                )
+                if not renewed:
+                    logger.error(
+                        "session turn lease lost session=%s",
+                        session_key,
+                    )
+                    if owner_task is not None and not owner_task.done():
+                        owner_task.cancel()
+                    return
+
+    @staticmethod
+    def _lease_timestamp(value: datetime) -> str:
+        return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
 
     @staticmethod
     def private_key(user_id: str) -> str:

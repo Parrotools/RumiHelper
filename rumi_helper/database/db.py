@@ -21,6 +21,7 @@ from rumi_helper.database.repositories.outbound import OutboundRepository
 from rumi_helper.database.repositories.pending_broadcasts import PendingBroadcastRepository
 from rumi_helper.database.repositories.reports import ReportRepository
 from rumi_helper.database.repositories.scheduler import SchedulerRepository
+from rumi_helper.database.repositories.session_turns import SessionTurnRepository
 from rumi_helper.database.repositories.settings import SettingsRepository
 
 
@@ -48,6 +49,7 @@ class Database(
     MemoryRepository,
     MessageEventRepository,
     SchedulerRepository,
+    SessionTurnRepository,
     AgentActionRepository,
     SettingsRepository,
     GitHubRepository,
