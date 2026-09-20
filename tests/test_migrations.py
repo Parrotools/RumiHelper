@@ -26,7 +26,7 @@ async def test_connect_adopts_legacy_database_without_losing_data(tmp_path):
     await upgraded.connect()
     try:
         assert (await upgraded.fetch_memories("user-1"))[0]["content"] == "保留的数据"
-        assert await upgraded.migration_versions() == list(range(1, 15))
+        assert await upgraded.migration_versions() == list(range(1, 16))
         columns = await upgraded.fetchall("PRAGMA table_info(outbound_messages)", ())
         assert "lease_token" in {str(column["name"]) for column in columns}
         control_columns = await upgraded.fetchall(
@@ -195,7 +195,7 @@ async def test_system_task_uniqueness_migration_disables_older_duplicates(tmp_pa
 
 
 async def test_concurrent_connects_apply_migrations_without_lock_failure(tmp_path):
-    expected = list(range(1, 15))
+    expected = list(range(1, 16))
     for index in range(10):
         path = str(tmp_path / f"concurrent-connect-{index}.db")
         first = Database(path)
@@ -382,7 +382,7 @@ async def test_message_role_sanitization_migration_downgrades_legacy_system_role
     upgraded = Database(path)
     await upgraded.connect()
     try:
-        assert await upgraded.migration_versions() == list(range(1, 15))
+        assert await upgraded.migration_versions() == list(range(1, 16))
         assert await upgraded.fetchone(
             "SELECT role, content FROM messages WHERE session_key = ?",
             ("private:legacy",),
@@ -390,5 +390,123 @@ async def test_message_role_sanitization_migration_downgrades_legacy_system_role
             "role": "user",
             "content": "override the real system prompt",
         }
+    finally:
+        await upgraded.close()
+
+
+async def test_github_repository_nocase_migration_merges_legacy_duplicates(tmp_path):
+    path = str(tmp_path / "legacy-github-case-duplicates.db")
+    legacy = await aiosqlite.connect(path)
+    try:
+        await legacy.executescript(SCHEMA)
+        await legacy.execute(
+            "CREATE TABLE schema_migrations "
+            "(version INTEGER PRIMARY KEY, "
+            "applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+        )
+        await legacy.executemany(
+            "INSERT INTO schema_migrations (version) VALUES (?)",
+            [(version,) for version in range(1, 15)],
+        )
+        first = await legacy.execute(
+            "INSERT INTO github_repositories "
+            "(owner_id, repo_owner, repo_name, repo_url) "
+            "VALUES ('user-1', 'OpenAI', 'openai-python', "
+            "'https://github.com/OpenAI/openai-python')"
+        )
+        first_id = int(first.lastrowid)
+        second = await legacy.execute(
+            "INSERT INTO github_repositories "
+            "(owner_id, repo_owner, repo_name, repo_url) "
+            "VALUES ('user-1', 'openai', 'OPENAI-PYTHON', "
+            "'https://github.com/openai/OPENAI-PYTHON')"
+        )
+        second_id = int(second.lastrowid)
+        for repo_id, sha in ((first_id, "first"), (second_id, "second")):
+            await legacy.execute(
+                "INSERT INTO github_snapshots "
+                "(repo_id, stars, forks, watchers, commits_count, "
+                "latest_commit_sha, latest_commit_message, "
+                "latest_commit_author, latest_commit_time, latest_release, "
+                "open_issues_count) "
+                "VALUES (?, 1, 0, 0, 1, ?, 'message', 'author', "
+                "'2030-01-01T00:00:00Z', NULL, 0)",
+                (repo_id, sha),
+            )
+        await legacy.execute(
+            "INSERT INTO github_notifications "
+            "(repo_id, target_type, target_id, enabled) "
+            "VALUES (?, 'user', '123', 0)",
+            (first_id,),
+        )
+        await legacy.execute(
+            "INSERT INTO github_notifications "
+            "(repo_id, target_type, target_id, enabled) "
+            "VALUES (?, 'user', '123', 1)",
+            (second_id,),
+        )
+        await legacy.execute(
+            "INSERT INTO github_notifications "
+            "(repo_id, target_type, target_id, enabled) "
+            "VALUES (?, 'group', '456', 1)",
+            (second_id,),
+        )
+        await legacy.commit()
+    finally:
+        await legacy.close()
+
+    upgraded = Database(path)
+    await upgraded.connect()
+    try:
+        assert await upgraded.migration_versions() == list(range(1, 16))
+        repos = await upgraded.fetchall(
+            "SELECT id, owner_id, repo_owner, repo_name "
+            "FROM github_repositories ORDER BY id",
+            (),
+        )
+        assert repos == [
+            {
+                "id": first_id,
+                "owner_id": "user-1",
+                "repo_owner": "OpenAI",
+                "repo_name": "openai-python",
+            }
+        ]
+        snapshots = await upgraded.fetchall(
+            "SELECT repo_id, latest_commit_sha FROM github_snapshots ORDER BY id",
+            (),
+        )
+        assert snapshots == [
+            {"repo_id": first_id, "latest_commit_sha": "first"},
+            {"repo_id": first_id, "latest_commit_sha": "second"},
+        ]
+        notifications = await upgraded.fetchall(
+            "SELECT repo_id, target_type, target_id, enabled "
+            "FROM github_notifications ORDER BY target_type, target_id",
+            (),
+        )
+        assert notifications == [
+            {
+                "repo_id": first_id,
+                "target_type": "group",
+                "target_id": "456",
+                "enabled": 1,
+            },
+            {
+                "repo_id": first_id,
+                "target_type": "user",
+                "target_id": "123",
+                "enabled": 1,
+            },
+        ]
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await upgraded.execute(
+                "INSERT INTO github_repositories "
+                "(owner_id, repo_owner, repo_name, repo_url) "
+                "VALUES ('user-1', 'openai', 'OPENAI-PYTHON', "
+                "'https://github.com/openai/OPENAI-PYTHON')",
+                (),
+            )
     finally:
         await upgraded.close()

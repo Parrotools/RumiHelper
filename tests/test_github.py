@@ -1336,3 +1336,27 @@ async def test_digest_configuration_cancellation_restores_previous_targets(db):
         ("github_digest", "5 * * * *"),
         ("github_digest", ""),
     ]
+
+
+async def test_repository_identity_is_case_insensitive_per_owner(db):
+    tracker = GitHubTracker(db, FakeGitHubClient(_snapshot("first")))
+
+    first = await tracker.add_repository(
+        "user-1",
+        "https://github.com/OpenAI/openai-python",
+    )
+    second = await tracker.add_repository(
+        "user-1",
+        "https://github.com/openai/OPENAI-PYTHON",
+    )
+
+    assert second["id"] == first["id"]
+    repos = await tracker.list_repositories("user-1")
+    assert len(repos) == 1
+    assert repos[0]["id"] == first["id"]
+
+    assert await tracker.remove_repository(
+        "user-1",
+        "https://github.com/OPENAI/OpenAI-Python",
+    )
+    assert await tracker.list_repositories("user-1") == []

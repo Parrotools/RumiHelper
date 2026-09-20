@@ -227,6 +227,74 @@ SET role = 'user'
 WHERE role NOT IN ('user', 'assistant');
 """
 
+GITHUB_REPOSITORY_NOCASE_SCHEMA = """
+CREATE TEMP TABLE github_repo_merge_map (
+    old_id INTEGER PRIMARY KEY,
+    keep_id INTEGER NOT NULL
+);
+INSERT INTO github_repo_merge_map (old_id, keep_id)
+SELECT repo.id,
+       (
+           SELECT MIN(candidate.id)
+           FROM github_repositories AS candidate
+           WHERE candidate.owner_id = repo.owner_id
+             AND lower(candidate.repo_owner) = lower(repo.repo_owner)
+             AND lower(candidate.repo_name) = lower(repo.repo_name)
+       )
+FROM github_repositories AS repo
+WHERE repo.id <> (
+    SELECT MIN(candidate.id)
+    FROM github_repositories AS candidate
+    WHERE candidate.owner_id = repo.owner_id
+      AND lower(candidate.repo_owner) = lower(repo.repo_owner)
+      AND lower(candidate.repo_name) = lower(repo.repo_name)
+);
+
+INSERT INTO github_notifications (repo_id, target_type, target_id, enabled)
+SELECT mapping.keep_id,
+       notification.target_type,
+       notification.target_id,
+       notification.enabled
+FROM github_notifications AS notification
+JOIN github_repo_merge_map AS mapping
+  ON mapping.old_id = notification.repo_id
+WHERE 1
+ON CONFLICT(repo_id, target_type, target_id)
+DO UPDATE SET enabled = MAX(
+    github_notifications.enabled,
+    excluded.enabled
+);
+
+DELETE FROM github_notifications
+WHERE repo_id IN (
+    SELECT old_id FROM github_repo_merge_map
+);
+
+UPDATE github_snapshots
+SET repo_id = (
+    SELECT keep_id
+    FROM github_repo_merge_map
+    WHERE old_id = github_snapshots.repo_id
+)
+WHERE repo_id IN (
+    SELECT old_id FROM github_repo_merge_map
+);
+
+DELETE FROM github_repositories
+WHERE id IN (
+    SELECT old_id FROM github_repo_merge_map
+);
+
+DROP TABLE github_repo_merge_map;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repositories_owner_repo_nocase
+ON github_repositories(
+    owner_id,
+    repo_owner COLLATE NOCASE,
+    repo_name COLLATE NOCASE
+);
+"""
+
 AGENT_ACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_agent_actions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -259,4 +327,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (12, OUTBOUND_CLAIM_OWNERSHIP_SCHEMA),
     (13, OUTBOUND_SEND_SLOT_SCHEMA),
     (14, MESSAGE_ROLE_SANITIZATION_SCHEMA),
+    (15, GITHUB_REPOSITORY_NOCASE_SCHEMA),
 )

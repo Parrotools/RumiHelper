@@ -19,7 +19,9 @@ class GitHubRepository:
                 await self.conn.execute("BEGIN IMMEDIATE")
                 row = await self.fetchone(
                     "SELECT id FROM github_repositories "
-                    "WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+                    "WHERE owner_id = ? "
+                    "AND repo_owner = ? COLLATE NOCASE "
+                    "AND repo_name = ? COLLATE NOCASE",
                     (owner_id, repo_owner, repo_name),
                 )
                 if row is not None:
@@ -54,7 +56,9 @@ class GitHubRepository:
         self, owner_id: str, repo_owner: str, repo_name: str
     ) -> dict | None:
         return await self.fetchone(
-            "SELECT * FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+            "SELECT * FROM github_repositories WHERE owner_id = ? "
+            "AND repo_owner = ? COLLATE NOCASE "
+            "AND repo_name = ? COLLATE NOCASE",
             (owner_id, repo_owner, repo_name),
         )
 
@@ -93,16 +97,22 @@ class GitHubRepository:
             try:
                 await self.conn.execute(
                     "DELETE FROM github_snapshots WHERE repo_id IN "
-                    "(SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?)",
+                    "(SELECT id FROM github_repositories WHERE owner_id = ? "
+                    "AND repo_owner = ? COLLATE NOCASE "
+                    "AND repo_name = ? COLLATE NOCASE)",
                     where,
                 )
                 await self.conn.execute(
                     "DELETE FROM github_notifications WHERE repo_id IN "
-                    "(SELECT id FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?)",
+                    "(SELECT id FROM github_repositories WHERE owner_id = ? "
+                    "AND repo_owner = ? COLLATE NOCASE "
+                    "AND repo_name = ? COLLATE NOCASE)",
                     where,
                 )
                 async with self.conn.execute(
-                    "DELETE FROM github_repositories WHERE owner_id = ? AND repo_owner = ? AND repo_name = ?",
+                    "DELETE FROM github_repositories WHERE owner_id = ? "
+                    "AND repo_owner = ? COLLATE NOCASE "
+                    "AND repo_name = ? COLLATE NOCASE",
                     where,
                 ) as cursor:
                     deleted = cursor.rowcount > 0
