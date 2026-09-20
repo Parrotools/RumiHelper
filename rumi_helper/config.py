@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     # 权限与群发
     admin_qq_ids: str = ""
     max_broadcast_recipients: int = 20
+    # 所有主动发送（direct/broadcast/outbound queue）共享的进程内速率上限
     send_rate_limit_per_second: float = 1.0
     # 所有交互回复共用的最小发送速率，避免多个并发会话瞬时集中发送
     interactive_send_rate_limit_per_second: float = 0.5

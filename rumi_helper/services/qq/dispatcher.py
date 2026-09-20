@@ -90,6 +90,8 @@ class MessageDispatcher:
     ):
         self._db = db
         self._interval = 1.0 / rate_limit_per_second if rate_limit_per_second and rate_limit_per_second > 0 else 0.0
+        self._send_lock = asyncio.Lock()
+        self._next_send_at = 0.0
         self._api_caller = api_caller
         self._retry_delay_seconds = max(0.0, retry_delay_seconds)
         self._account_pause_seconds = max(0.0, account_pause_seconds)
@@ -308,10 +310,6 @@ class MessageDispatcher:
 
     async def _send(self, target_type: str, target_id: str, message: str) -> SendResult:
         message = truncate_for_qq(str(message))
-        if await self._remaining_pause_seconds() > 0:
-            result = SendResult(target_type, target_id, False, error="主动发送已暂停，等待账号/API恢复")
-            await self._log(result, message)
-            return result
         try:
             numeric_id = int(target_id)
         except ValueError:
@@ -330,6 +328,59 @@ class MessageDispatcher:
                 else {"group_id": numeric_id}
             ),
         }
+
+        # Every active send path (direct send, broadcast, durable queue) converges
+        # here. Serialize them so SEND_RATE_LIMIT_PER_SECOND is a process-wide
+        # outbound limit instead of a per-broadcast delay.
+        async with self._send_lock:
+            if await self._remaining_pause_seconds() > 0:
+                result = SendResult(
+                    target_type,
+                    target_id,
+                    False,
+                    error="主动发送已暂停，等待账号/API恢复",
+                )
+            else:
+                if self._interval > 0:
+                    now = time.monotonic()
+                    delay = max(0.0, self._next_send_at - now)
+                    if delay:
+                        await asyncio.sleep(delay)
+                    # A different process may have persisted a cooldown while
+                    # this sender waited for its slot.
+                    if await self._remaining_pause_seconds() > 0:
+                        result = SendResult(
+                            target_type,
+                            target_id,
+                            False,
+                            error="主动发送已暂停，等待账号/API恢复",
+                        )
+                    else:
+                        self._next_send_at = time.monotonic() + self._interval
+                        result = await self._call_onebot_send(
+                            action,
+                            params,
+                            target_type,
+                            target_id,
+                        )
+                else:
+                    result = await self._call_onebot_send(
+                        action,
+                        params,
+                        target_type,
+                        target_id,
+                    )
+
+        await self._log(result, message)
+        return result
+
+    async def _call_onebot_send(
+        self,
+        action: str,
+        params: dict,
+        target_type: str,
+        target_id: str,
+    ) -> SendResult:
         try:
             resp = await self._call_api(action, **params)
             if not isinstance(resp, dict) or resp.get("message_id") is None:
@@ -346,27 +397,24 @@ class MessageDispatcher:
                 target_id,
                 result.message_id,
             )
+            return result
         except Exception as e:  # noqa: BLE001 —— 单目标失败必须被记录，不向外扩散
             raw_error = f"{type(e).__name__}: {e}"
             pause_seconds = self._pause_for_error(raw_error)
             if pause_seconds > 0:
                 await self._persist_pause(pause_seconds)
             safe_error = self._safe_error_label(raw_error, type(e).__name__)
-            result = SendResult(target_type, target_id, False, error=safe_error)
             logger.warning(
                 "发送失败 type=%s id=%s error=%s",
                 target_type,
                 target_id,
                 safe_error,
             )
-        await self._log(result, message)
-        return result
+            return SendResult(target_type, target_id, False, error=safe_error)
 
     async def broadcast(self, targets: list[BroadcastTarget], message: str) -> BroadcastReport:
         report = BroadcastReport()
         for i, t in enumerate(targets):
-            if i > 0 and self._interval > 0:
-                await asyncio.sleep(self._interval)  # 限速，禁止瞬时并发轰炸
             report.results.append(await self._send(t.type, t.id, message))
             if await self._remaining_pause_seconds() > 0:
                 report.skipped_targets.extend(targets[i + 1 :])

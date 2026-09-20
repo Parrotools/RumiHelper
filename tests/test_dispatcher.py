@@ -1,5 +1,6 @@
 """MessageDispatcher 测试：发送、失败记录、broadcast 部分失败继续、限速间隔。"""
 
+import asyncio
 import time
 
 import pytest
@@ -91,6 +92,66 @@ async def test_broadcast_rate_limit(db):
     elapsed = time.monotonic() - start
     # 3 次间隔 * 1/50s = 0.06s，至少要有间隔（保守断言避免抖动）
     assert elapsed >= 0.045
+
+
+async def test_concurrent_sends_share_process_wide_rate_limit(db):
+    started: list[float] = []
+
+    async def caller(action: str, **params) -> dict:
+        started.append(time.monotonic())
+        return {"message_id": len(started)}
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=50,
+        api_caller=caller,
+    )
+
+    await asyncio.gather(
+        dispatcher.send_user("101", "one"),
+        dispatcher.send_group("202", "two"),
+        dispatcher.broadcast([BroadcastTarget("user", "303")], "three"),
+    )
+
+    assert len(started) == 3
+    assert started[-1] - started[0] >= 0.03
+
+
+async def test_waiting_send_stops_after_concurrent_rate_limit_failure(db):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def caller(action: str, **params) -> dict:
+        target_id = str(params.get("user_id") or params.get("group_id"))
+        calls.append(target_id)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            raise RuntimeError("429 rate limit")
+        return {"message_id": target_id}
+
+    dispatcher = MessageDispatcher(
+        db,
+        rate_limit_per_second=100,
+        api_caller=caller,
+        rate_limit_pause_seconds=60,
+    )
+
+    first = asyncio.create_task(dispatcher.send_user("101", "one"))
+    await entered.wait()
+    second = asyncio.create_task(dispatcher.send_user("202", "two"))
+    await asyncio.sleep(0)
+    assert second.done() is False
+
+    release.set()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert first_result.success is False
+    assert first_result.error == "RateLimit"
+    assert second_result.success is False
+    assert "暂停" in (second_result.error or "")
+    assert calls == ["101"]
 
 
 async def test_broadcast_empty_targets(db):
