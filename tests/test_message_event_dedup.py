@@ -161,8 +161,9 @@ def test_event_dedup_key_scopes_message_id_by_bot_and_conversation():
         event_dedup_key(private(10000, 20001)),
         event_dedup_key(private(10000, 20002)),
         event_dedup_key(group(10000, 30001, 20001)),
+        event_dedup_key(group(10000, 30001, 20002)),
         event_dedup_key(group(10000, 30002, 20001)),
         event_dedup_key(private(10001, 20001)),
     }
 
-    assert len(keys) == 5
+    assert len(keys) == 6

@@ -29,7 +29,7 @@ def event_dedup_key(event: MessageEvent) -> str:
     """Scope message IDs by bot and conversation so unrelated chats cannot collide."""
     group_id = getattr(event, "group_id", None)
     if group_id is not None:
-        scope = f"group:{group_id}"
+        scope = f"group:{group_id}:user:{event.user_id}"
     else:
         scope = f"private:{event.user_id}"
     return f"{event.self_id}:{scope}:{event.message_id}"
