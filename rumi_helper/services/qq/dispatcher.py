@@ -246,10 +246,17 @@ class MessageDispatcher:
                     str(row["target_type"]),
                     str(row["target_id"]),
                     str(row["content"]),
+                    notification_owner_id=notification_owner_id or None,
+                    notification_kind=notification_kind or None,
                 )
                 processed += 1
                 owned = False
-                if result.success:
+                if result.error == "NotificationDisabled":
+                    owned = await self._db.discard_claimed_outbound_message(
+                        message_id,
+                        lease_token,
+                    )
+                elif result.success:
                     owned = await self._db.mark_outbound_message_sent(
                         message_id,
                         self._lease_timestamp(datetime.now(UTC)),
@@ -334,7 +341,15 @@ class MessageDispatcher:
     async def send_group(self, group_id: str, message: str) -> SendResult:
         return await self._send("group", str(group_id), message)
 
-    async def _send(self, target_type: str, target_id: str, message: str) -> SendResult:
+    async def _send(
+        self,
+        target_type: str,
+        target_id: str,
+        message: str,
+        *,
+        notification_owner_id: str | None = None,
+        notification_kind: str | None = None,
+    ) -> SendResult:
         message = truncate_for_qq(str(message))
         try:
             numeric_id = int(target_id)
@@ -359,6 +374,7 @@ class MessageDispatcher:
         # here. Serialize them so SEND_RATE_LIMIT_PER_SECOND is a process-wide
         # database-wide outbound limit instead of a per-broadcast delay.
         async with self._send_lock:
+            result: SendResult | None = None
             if await self._remaining_pause_seconds() > 0:
                 result = SendResult(
                     target_type,
@@ -378,14 +394,21 @@ class MessageDispatcher:
                             False,
                             error="主动发送已暂停，等待账号/API恢复",
                         )
-                    else:
-                        result = await self._call_onebot_send(
-                            action,
-                            params,
+
+                if result is None and notification_owner_id and notification_kind:
+                    enabled = await self._db.outbound_notification_enabled(
+                        notification_owner_id,
+                        notification_kind,
+                    )
+                    if not enabled:
+                        return SendResult(
                             target_type,
                             target_id,
+                            False,
+                            error="NotificationDisabled",
                         )
-                else:
+
+                if result is None:
                     result = await self._call_onebot_send(
                         action,
                         params,

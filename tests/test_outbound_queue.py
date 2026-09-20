@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -825,3 +826,45 @@ async def test_notification_preflight_keeps_lease_heartbeat_alive(tmp_path):
         release.set()
         await first_db.close()
         await second_db.close()
+
+async def test_notification_disabled_while_waiting_for_send_slot_is_not_sent(db):
+    await db.patch_notification_settings("123", reminder_notify=True)
+    await db.execute(
+        "INSERT INTO outbound_messages "
+        "(target_type, target_id, content, max_attempts, next_attempt_at, "
+        "notification_kind, notification_owner_id) "
+        "VALUES ('user', '123', 'reminder', 3, datetime('now'), "
+        "'reminder', '123')",
+        (),
+    )
+
+    calls = 0
+
+    async def api_caller(action: str, **params) -> dict:
+        nonlocal calls
+        calls += 1
+        return {"message_id": 801}
+
+    dispatcher = MessageDispatcher(
+        db,
+        api_caller=api_caller,
+        rate_limit_per_second=2.0,
+        lease_seconds=2.0,
+    )
+
+    now = datetime.now(UTC)
+    assert await db.reserve_outbound_send_slot(
+        dispatcher._lease_timestamp(now),
+        dispatcher._lease_timestamp(now + timedelta(seconds=0.5)),
+    )
+
+    running = asyncio.create_task(dispatcher.process_outbound_messages(limit=1))
+    await asyncio.sleep(0.1)
+    await db.patch_notification_settings("123", reminder_notify=False)
+
+    assert await running == 1
+    assert calls == 0
+    assert await db.fetchone(
+        "SELECT COUNT(*) AS count FROM outbound_messages",
+        (),
+    ) == {"count": 0}
