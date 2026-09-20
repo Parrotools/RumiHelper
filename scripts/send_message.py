@@ -16,6 +16,9 @@ import sys
 
 import httpx
 
+from rumi_helper.security.config import onebot_token_values_conflict
+from rumi_helper.security.identifiers import is_ascii_decimal_id
+
 
 def _is_loopback_host(host: str) -> bool:
     value = str(host).strip().lower().strip("[]")
@@ -49,14 +52,23 @@ def main() -> int:
     target, message = sys.argv[1], sys.argv[2]
     type_, sep, target_id = target.partition(":")
     type_ = type_.strip().lower()
-    if not sep or type_ not in ("user", "group") or not target_id.isdigit():
+    if (
+        not sep
+        or type_ not in ("user", "group")
+        or not is_ascii_decimal_id(target_id)
+    ):
         print("目标格式应为 user:QQ号 或 group:群号")
         return 2
 
-    token = (
-        os.environ.get("ONEBOT_V11_ACCESS_TOKEN", "").strip()
-        or os.environ.get("ONEBOT_ACCESS_TOKEN", "").strip()
-    )
+    canonical_token = os.environ.get("ONEBOT_V11_ACCESS_TOKEN", "").strip()
+    legacy_token = os.environ.get("ONEBOT_ACCESS_TOKEN", "").strip()
+    if onebot_token_values_conflict(canonical_token, legacy_token):
+        print(
+            "配置错误：ONEBOT_V11_ACCESS_TOKEN 与 "
+            "ONEBOT_ACCESS_TOKEN 同时配置但值不一致"
+        )
+        return 2
+    token = canonical_token or legacy_token
     try:
         base_url = _validate_base_url(
             os.environ.get("ONEBOT_HTTP_URL", "http://127.0.0.1:3000"),

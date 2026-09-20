@@ -10,11 +10,23 @@ class SecurityConfigurationError(ValueError):
     """Runtime configuration would expose credentials or an unauthenticated service."""
 
 
+def onebot_token_values_conflict(canonical: object, legacy: object) -> bool:
+    """Return True when canonical and legacy OneBot token values disagree."""
+    canonical_value = str(canonical or "").strip()
+    legacy_value = str(legacy or "").strip()
+    return bool(
+        canonical_value
+        and legacy_value
+        and canonical_value != legacy_value
+    )
+
+
 def onebot_token_alias_conflict(settings) -> bool:
     """Return True when canonical and legacy OneBot token aliases disagree."""
-    canonical = str(settings.onebot_v11_access_token).strip()
-    legacy = str(settings.onebot_access_token).strip()
-    return bool(canonical and legacy and canonical != legacy)
+    return onebot_token_values_conflict(
+        settings.onebot_v11_access_token,
+        settings.onebot_access_token,
+    )
 
 
 def validate_onebot_token_aliases(settings) -> None:

@@ -112,7 +112,7 @@ cp .env.example .env      # Windows: copy .env.example .env
 |---|---|
 | `ONEBOT_V11_ACCESS_TOKEN` | 自定一个随机字符串，**必须与 NapCat 侧填的完全一致** |
 
-> 兼容旧配置名 `ONEBOT_ACCESS_TOKEN`；新部署应使用 OneBot v11 adapter 的 canonical 名称 `ONEBOT_V11_ACCESS_TOKEN`。
+> 兼容旧配置名 `ONEBOT_ACCESS_TOKEN`；新部署应使用 OneBot v11 adapter 的 canonical 名称 `ONEBOT_V11_ACCESS_TOKEN`。两者不要同时设置成不同值，否则 Bot 和独立发送脚本都会拒绝启动/发送。
 | `LLM_API_KEY` | 你的 LLM API Key |
 | `LLM_BASE_URL` / `LLM_MODEL` | 按厂商填，如 GLM：`https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash` |
 | `PERSONALITY_FILE` | 人格 YAML 文件路径，默认 `rumi_helper/personality/rumi.yaml` |

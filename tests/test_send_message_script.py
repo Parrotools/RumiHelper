@@ -140,7 +140,7 @@ def test_main_handles_invalid_json_without_traceback(monkeypatch, capsys):
     assert "无效 JSON" in capsys.readouterr().out
 
 
-def test_main_prefers_canonical_onebot_token(monkeypatch):
+def test_main_accepts_matching_onebot_token_aliases(monkeypatch):
     captured = {}
 
     def fake_post(url, *, json, headers, timeout):
@@ -154,8 +154,59 @@ def test_main_prefers_canonical_onebot_token(monkeypatch):
         ["send_message.py", "user:123", "hello"],
     )
     monkeypatch.setenv("ONEBOT_HTTP_URL", "https://onebot.example.com/api")
-    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "legacy")
-    monkeypatch.setenv("ONEBOT_V11_ACCESS_TOKEN", "canonical")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", "same")
+    monkeypatch.setenv("ONEBOT_V11_ACCESS_TOKEN", "same")
 
     assert send_message.main() == 0
-    assert captured["authorization"] == "Bearer canonical"
+    assert captured["authorization"] == "Bearer same"
+
+
+def test_main_rejects_conflicting_onebot_token_aliases_without_request(
+    monkeypatch,
+    capsys,
+):
+    called = False
+    canonical = "canonical-secret-do-not-print"
+    legacy = "legacy-secret-do-not-print"
+
+    def fake_post(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("request must not be sent")
+
+    monkeypatch.setattr(send_message.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", "user:123", "hello"],
+    )
+    monkeypatch.setenv("ONEBOT_HTTP_URL", "https://onebot.example.com/api")
+    monkeypatch.setenv("ONEBOT_ACCESS_TOKEN", legacy)
+    monkeypatch.setenv("ONEBOT_V11_ACCESS_TOKEN", canonical)
+
+    assert send_message.main() == 2
+    output = capsys.readouterr().out
+    assert called is False
+    assert "值不一致" in output
+    assert canonical not in output
+    assert legacy not in output
+
+
+@pytest.mark.parametrize("target", ["user:0", "group:000", "user:１２３", "channel:123"])
+def test_main_rejects_invalid_qq_targets_before_request(monkeypatch, target):
+    called = False
+
+    def fake_post(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("request must not be sent")
+
+    monkeypatch.setattr(send_message.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        send_message.sys,
+        "argv",
+        ["send_message.py", target, "hello"],
+    )
+
+    assert send_message.main() == 2
+    assert called is False
