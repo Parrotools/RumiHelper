@@ -18,7 +18,6 @@ from rumi_helper.utils import send_local_reply, send_reply, truncate_for_qq
 # Compatibility re-exports: other plugins and tests historically import these
 # helpers from rumi_helper.plugins.ai_chat.
 _claim_event = _message_utils.claim_event
-_event_dedup_key = _message_utils.event_dedup_key
 command_is_addressed = _message_utils.command_is_addressed
 _has_bot_mention = _message_utils.has_bot_mention
 _is_addressed_to_bot = _message_utils.is_addressed_to_bot
@@ -132,30 +131,6 @@ async def _append_turn(sessions, session_key: str, user_text: str, assistant_tex
     await sessions.append(session_key, "assistant", assistant_text)
 
 
-async def _claim_event_once(event: MessageEvent) -> bool:
-    """Claim an inbound event both in-process and durably across Bot processes."""
-    key = _event_dedup_key(event)
-    if not _message_utils.claim_message_id(key):
-        return False
-
-    try:
-        runtime = get_runtime()
-    except RuntimeError:
-        # Trigger-focused unit tests may run before Runtime is initialized.
-        # The in-process LRU still preserves historical compatibility there.
-        return True
-
-    try:
-        return await runtime.db.claim_message_event(key)
-    except Exception as exc:  # noqa: BLE001 - dedup failure must fail closed
-        logger.error(
-            "消息持久化去重失败 key=%s error=%s",
-            key,
-            type(exc).__name__,
-        )
-        return False
-
-
 async def _trigger(event: MessageEvent) -> bool:
     if _is_self(event):
         return False  # 过滤自己的消息，防循环
@@ -169,7 +144,7 @@ async def _trigger(event: MessageEvent) -> bool:
     else:
         matched = True  # 私聊默认直接进入 LLM
     if matched:
-        return await _claim_event_once(event)
+        return _claim_event(event)
     return False
 
 
@@ -283,7 +258,7 @@ async def _meta_trigger(event: GroupMessageEvent) -> bool:
         return False
     text = strip_bot_mention(event.message.extract_plain_text())
     if text in ("/clear", "/help", "/帮助"):
-        return await _claim_event_once(event)
+        return _claim_event(event)
     return False
 
 

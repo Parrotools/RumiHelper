@@ -17,6 +17,7 @@ driver.register_adapter(OneBotV11Adapter)
 def _load_packaged_plugins() -> None:
     """Load packaged plugins by import path, independent of process cwd."""
     plugin_names = (
+        "event_dedup",
         "admin",
         "agent",
         "ai_chat",

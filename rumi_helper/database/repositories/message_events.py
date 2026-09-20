@@ -1,6 +1,6 @@
 """Durable deduplication for inbound OneBot message events."""
 
-_MESSAGE_EVENT_HISTORY_LIMIT = 8192
+_MESSAGE_EVENT_HISTORY_LIMIT = 100_000
 
 
 class MessageEventRepository:
